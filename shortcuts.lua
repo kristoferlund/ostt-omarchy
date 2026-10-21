@@ -1,4 +1,4 @@
--- omarchy-ostt:managed - linked by omarchy-ostt's install script. Delete this
+-- ostt-omarchy:managed - linked by ostt-omarchy's install script. Delete this
 -- line to keep your own edits; the script then leaves the file alone.
 --
 -- Omarchy loads this file while OSTT is the selected dictation backend.

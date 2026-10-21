@@ -16,7 +16,7 @@ This repo has four parts:
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/kristoferlund/omarchy-ostt.git --enable
+omarchy plugin add https://github.com/kristoferlund/ostt-omarchy.git --enable
 ~/.config/omarchy/plugins/ostt.dictation/install
 ```
 
