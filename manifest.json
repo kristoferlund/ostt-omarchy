@@ -4,9 +4,9 @@
   "name": "OSTT Dictation",
   "version": "0.1.0",
   "author": "Kristofer Lund",
-  "description": "Dictation status and controls for OSTT in the Omarchy bar",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "Widget.qml" },
+  "description": "Recording popup, bar status and Omarchy dictation backend for OSTT",
+  "kinds": ["bar-widget", "panel"],
+  "entryPoints": { "barWidget": "Widget.qml", "panel": "Popup.qml" },
   "barWidget": {
     "displayName": "OSTT Dictation",
     "description": "Shows whether OSTT is recording or transcribing; click to dictate, right-click to cancel",

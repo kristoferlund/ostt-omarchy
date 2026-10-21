@@ -6,6 +6,7 @@
 #
 #   ostt-dictate start | stop | toggle | cancel
 #   ostt-dictate status [--json] [--follow]
+#   ostt-dictate levels   follow the input level while recording
 
 set -u
 
@@ -14,6 +15,7 @@ audio="$dir/recording.wav"
 recorder_pid="$dir/recorder.pid"
 worker_pid="$dir/worker.pid"
 error_file="$dir/error"
+levels="$dir/levels"
 
 mkdir -p "$dir" && chmod 700 "$dir"
 
@@ -34,7 +36,7 @@ running() {
   [[ $pid =~ ^[0-9]+$ ]] && grep -qa "$2" "/proc/$pid/cmdline" 2>/dev/null
 }
 
-recording() { running "$recorder_pid" pw-record; }
+recording() { running "$recorder_pid" ffmpeg; }
 transcribing() { running "$worker_pid" ostt-dictate; }
 
 state() {
@@ -55,7 +57,7 @@ lock() {
   flock -w 10 8 || fail "Dictation is busy; try again."
 }
 
-# Sends SIGINT so pw-record finishes the WAV header, and waits for it.
+# Sends SIGINT so ffmpeg finishes the WAV header, and waits for it.
 stop_recorder() {
   local pid
   pid=$(cat "$recorder_pid")
@@ -76,7 +78,12 @@ start() {
   ostt model current >/dev/null 2>&1 || fail "No transcription model is selected. Run 'ostt model'."
 
   rm -f "$error_file" "$audio"
-  setsid pw-record --rate 16000 --channels 1 --format s16 "$audio" \
+  : >"$levels"
+  # One capture: 16 kHz mono WAV for OSTT, and the RMS level every 50 ms for
+  # the popup's meter.
+  setsid ffmpeg -nostdin -hide_banner -loglevel error -f pulse -i default -filter_complex \
+    "[0:a]aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,asplit[rec][meter];[meter]asetnsamples=n=800,astats=metadata=1:reset=1:measure_perchannel=none,ametadata=print:key=lavfi.astats.Overall.RMS_level:direct=1:file=$levels[out]" \
+    -map "[rec]" -c:a pcm_s16le "$audio" -map "[out]" -f null - \
     </dev/null >/dev/null 2>"$dir/recorder.log" 8>&- &
   echo $! >"$recorder_pid"
   sleep 0.1
@@ -84,6 +91,8 @@ start() {
     rm -f "$recorder_pid"
     fail "Could not start the microphone: $(tail -n1 "$dir/recorder.log")"
   fi
+  # Show the recording popup when the Omarchy shell is running.
+  omarchy-shell -q shell summon ostt.dictation '{}' </dev/null >/dev/null 2>&1 8>&- &
 }
 
 stop() {
@@ -151,6 +160,7 @@ case "${1:-}" in
     ;;
   cancel) lock; cancel ;;
   status) shift; status "$@" ;;
+  levels) exec tail -n0 -F "$levels" 2>/dev/null ;;
   __transcribe) transcribe ;;
-  *) echo "Usage: ostt-dictate <start|stop|toggle|cancel|status [--json] [--follow]>" >&2; exit 1 ;;
+  *) echo "Usage: ostt-dictate <start|stop|toggle|cancel|status [--json] [--follow]|levels>" >&2; exit 1 ;;
 esac

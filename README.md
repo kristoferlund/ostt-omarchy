@@ -4,12 +4,13 @@ Use [OSTT](https://ostt.ai) as the dictation backend in Omarchy 4.5 or later.
 Hold Right Alt or F9 and speak; OSTT transcribes with the model you chose,
 local or cloud, and pastes into the focused app.
 
-This repo has three parts:
+This repo has four parts:
 
 - `ostt-dictate` records from the default microphone without a terminal and
   hands the recording to `ostt transcribe --paste`.
 - The Omarchy backend scripts, which run `ostt-dictate` from Omarchy's
   dictation keys and list OSTT in Setup > Defaults > Dictation.
+- A recording popup with a live level meter and the elapsed time.
 - A bar widget that shows whether OSTT is recording or transcribing.
 
 ## Install
@@ -39,6 +40,14 @@ OSTT records from the default input device; pick it in Omarchy's audio
 settings. A failed transcription keeps the recording and the notification tells
 you how to retry it.
 
+## Recording popup
+
+While you dictate, a small card at the bottom of the screen shows a pulsing
+dot, a live level meter and the elapsed time. During transcription the meter
+turns into a moving wave in the theme's accent color; the card fades out once
+the text is pasted. It never takes focus or clicks, and it follows the Omarchy
+theme.
+
 ## Bar widget
 
 | State | Icon |
@@ -60,9 +69,11 @@ Right-click cancels a recording or a pending transcription.
 ```
 ostt-dictate start | stop | toggle | cancel
 ostt-dictate status [--json] [--follow]
+ostt-dictate levels
 ```
 
 Each command returns at once; recording and transcription run in the
 background. `status --json --follow` prints a line such as
 `{"state":"recording"}` whenever the state changes. The states are `idle`,
-`recording`, `transcribing` and `error`.
+`recording`, `transcribing` and `error`. `ostt-dictate levels` follows the
+input level as ffmpeg's `RMS_level` lines in dBFS, for the popup's meter.

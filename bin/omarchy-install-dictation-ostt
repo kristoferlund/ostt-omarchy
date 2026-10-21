@@ -17,8 +17,8 @@ if omarchy-cmd-missing ostt; then
   fi
 fi
 
-# OSTT pastes on Wayland with wtype.
-omarchy-pkg-add wtype
+# ostt-dictate records with ffmpeg; OSTT pastes on Wayland with wtype.
+omarchy-pkg-add ffmpeg wtype
 
 if ! ostt model current >/dev/null 2>&1; then
   echo "Choose the model OSTT transcribes with."
