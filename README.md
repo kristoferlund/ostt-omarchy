@@ -24,7 +24,7 @@ OSTT must be installed and set up as the dictation backend first:
 
 ```bash
 curl -fsSL https://ostt.ai/install | bash
-ostt omarchy setup          # adds OSTT under Setup > Defaults > Dictation
+ostt omarchy setup          # only needed for AUR installs; the installer does it
 omarchy default dictation ostt
 ```
 
@@ -45,4 +45,4 @@ omarchy plugin add https://github.com/kristoferlund/omarchy-ostt.git --enable
 The widget runs `ostt dictate status --json --follow`, which prints a JSON line
 whenever the dictation state changes, and calls `ostt dictate toggle` and
 `ostt dictate cancel` for the buttons. See the
-[OSTT docs](https://ostt.ai/guide/omarchy-dictation) for the full interface.
+[OSTT docs](https://ostt.ai/guide/platforms/hyprland#dictation-backend) for the full interface.
