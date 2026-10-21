@@ -10,7 +10,7 @@ This repo has four parts:
   hands the recording to `ostt transcribe --paste`.
 - The Omarchy backend scripts, which run `ostt-dictate` from Omarchy's
   dictation keys and list OSTT in Setup > Defaults > Dictation.
-- A recording popup with a live level meter and the elapsed time.
+- A recording popup with a live level meter and cancel and transcribe buttons.
 - A bar widget that shows whether OSTT is recording or transcribing.
 
 ## Install
@@ -42,11 +42,11 @@ you how to retry it.
 
 ## Recording popup
 
-While you dictate, a small card at the bottom of the screen shows a pulsing
-dot, a live level meter and the elapsed time. During transcription the meter
-turns into a moving wave in the theme's accent color; the card fades out once
-the text is pasted. It never takes focus or clicks, and it follows the Omarchy
-theme.
+While you dictate, a rounded pill at the bottom of the screen shows a live
+level meter between two buttons: ✕ cancels the recording, and the green ✓ stops
+it and transcribes. During transcription the meter becomes a moving wave and the
+✓ a spinner; the pill fades out once the text is pasted. It never takes
+keyboard focus, so the text still lands in the app you were typing in.
 
 ## Bar widget
 

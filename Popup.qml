@@ -7,8 +7,8 @@ import qs.Ui
 
 // The recording popup. `ostt-dictate start` summons it; from then on it
 // follows `ostt-dictate status --follow` and closes itself once the dictation
-// is pasted, cancelled or has failed. It never takes focus or clicks, so the
-// text still lands in the app you were typing in.
+// is pasted, cancelled or has failed. It never takes keyboard focus, so the
+// text still lands in the app you were typing in; only the pill takes clicks.
 Item {
   id: root
 
@@ -18,13 +18,11 @@ Item {
   property bool mapped: false
   property string phase: "recording"
   property var levels: []
-  property int seconds: 0
 
   function open(payloadJson) {
     closeTimer.stop()
     if (!root.mapped) {
       root.levels = []
-      root.seconds = 0
       root.phase = "recording"
     }
     root.mapped = true
@@ -72,13 +70,6 @@ Item {
     onTriggered: root.mapped = false
   }
 
-  Timer {
-    interval: 1000
-    repeat: true
-    running: root.opened && root.phase === "recording"
-    onTriggered: root.seconds += 1
-  }
-
   Process {
     command: ["ostt-dictate", "status", "--json", "--follow"]
     running: root.mapped
@@ -99,18 +90,18 @@ Item {
     shown: root.mapped
     shownKeyboardFocus: WlrKeyboardFocus.None
     WlrLayershell.namespace: "ostt-dictation"
-    // Visual only: an empty input region lets clicks through to the desktop.
-    mask: Region {}
+    // Only the pill takes clicks; everywhere else they reach the desktop.
+    mask: Region { item: pill }
 
     Pill {
       id: pill
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: parent.bottom
-      // Where Omarchy shows its volume and brightness OSD.
-      anchors.bottomMargin: Style.space(67)
+      anchors.bottomMargin: Style.space(80)
       phase: root.phase
       levels: root.levels
-      seconds: root.seconds
+      onCancelClicked: Quickshell.execDetached(["ostt-dictate", "cancel"])
+      onConfirmClicked: Quickshell.execDetached(["ostt-dictate", "stop"])
 
       opacity: root.opened ? 1 : 0
       scale: root.opened ? 1 : 0.94
