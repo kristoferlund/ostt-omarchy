@@ -24,7 +24,7 @@ Then select OSTT in Setup > Defaults > Dictation. The setup installs OSTT from
 the AUR if it is missing, asks for a transcription model if none is selected,
 and offers to keep a local model loaded so dictation starts instantly.
 
-`omarchy plugin update ostt.dictation` updates everything. `./uninstall` in the
+`omarchy plugin update ostt.dictation --yes` updates everything (without `--yes`, Omarchy shows the code changes and asks first). `./uninstall` in the
 same folder switches dictation away from OSTT and removes the scripts; OSTT
 itself stays installed.
 
