@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Undoes ./install: stops using OSTT for dictation and removes the links and
+# the menu entry. OSTT itself stays installed.
+
+set -e
+
+repo=$(dirname "$(realpath "$0")")
+bin="$HOME/.local/bin"
+shortcuts="${XDG_CONFIG_HOME:-$HOME/.config}/ostt/shortcuts.lua"
+menu="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
+
+"$repo/bin/omarchy-remove-dictation-ostt"
+
+for script in "$repo"/bin/*; do
+  target="$bin/${script##*/}"
+  [[ -L $target && $(readlink "$target") == "$script" ]] && rm "$target"
+done
+[[ -L $shortcuts && $(readlink "$shortcuts") == "$repo/shortcuts.lua" ]] && rm "$shortcuts"
+
+if [[ -f $menu ]]; then
+  temporary=$(mktemp "$menu.XXXXXX")
+  trap 'rm -f "$temporary"' EXIT
+  awk '
+    { line = $0; gsub(/^[ \t]+|[ \t]+$/, "", line) }
+    line == "// omarchy-ostt:begin" { skip = 1; next }
+    skip && line == "// omarchy-ostt:end" { skip = 0; next }
+    !skip { print }
+  ' "$menu" >"$temporary"
+  cat "$temporary" >"$menu"
+fi

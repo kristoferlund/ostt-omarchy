@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# omarchy:summary=Record dictation using OSTT
+# omarchy:args=<start|stop|toggle>
+
+case "${1:-}" in
+  start|toggle) exec ostt-dictate "$1" ;;
+  stop)
+    # Omarchy stops the old backend before switching; never fail that.
+    if omarchy-cmd-missing ostt-dictate; then
+      exit 0
+    fi
+    exec ostt-dictate stop
+    ;;
+  *) echo "Usage: omarchy dictation ostt <start|stop|toggle>" >&2; exit 1 ;;
+esac

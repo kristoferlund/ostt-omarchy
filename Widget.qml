@@ -5,8 +5,8 @@ import qs.Commons
 import qs.Ui
 
 // Dictation status for OSTT. The widget is only a client: the recording runs
-// in an `ostt dictate` job of its own, so closing or reloading the bar never
-// abandons a recording. Status comes from `ostt dictate status --follow`,
+// in the background under `ostt-dictate`, so closing or reloading the bar never
+// abandons a recording. Status comes from `ostt-dictate status --follow`,
 // which prints a JSON line whenever the state changes.
 BarWidget {
   id: root
@@ -14,9 +14,7 @@ BarWidget {
 
   // idle | recording | transcribing | error, or "" while OSTT is unavailable.
   property string phase: ""
-  property string model: ""
   property string errorText: ""
-  property string outcome: ""
   // An error is shown prominently for a while, then the widget calms down;
   // the next dictation clears it.
   property bool errorFresh: false
@@ -37,9 +35,7 @@ BarWidget {
     }
     var previous = root.phase
     root.phase = String(status.state || "idle")
-    root.model = String(status.model || "")
     root.errorText = String(status.error || "")
-    root.outcome = String(status.outcome || "")
     if (root.phase === "error" && previous !== "error" && previous !== "") {
       root.errorFresh = true
       errorTimer.restart()
@@ -49,18 +45,18 @@ BarWidget {
   }
 
   function run(action) {
-    if (root.bar) root.bar.run("ostt dictate " + action)
+    if (root.bar) root.bar.run("ostt-dictate " + action)
   }
 
   Process {
     id: follower
-    command: ["ostt", "dictate", "status", "--json", "--follow"]
+    command: ["ostt-dictate", "status", "--json", "--follow"]
     running: true
     stdout: SplitParser {
       onRead: function(line) { root.apply(line) }
     }
     onExited: function() {
-      // OSTT missing, or replaced by an update: hide and try again shortly.
+      // ostt-dictate missing, or replaced by an update: hide and try again shortly.
       root.phase = ""
       restartTimer.restart()
     }
@@ -90,11 +86,10 @@ BarWidget {
     active: root.phase === "recording" || (root.phase === "error" && root.errorFresh)
     dimmed: root.phase === "idle" || (root.phase === "error" && !root.errorFresh)
     tooltipText: {
-      var model = root.model !== "" ? "\n" + root.model : ""
-      if (root.phase === "recording") return "OSTT is recording. Click to paste, right-click to cancel." + model
-      if (root.phase === "transcribing") return "OSTT is transcribing. Right-click to cancel." + model
+      if (root.phase === "recording") return "OSTT is recording. Click to paste, right-click to cancel."
+      if (root.phase === "transcribing") return "OSTT is transcribing. Right-click to cancel."
       if (root.phase === "error") return "OSTT dictation failed:\n" + root.errorText
-      return "OSTT dictation. Click to start." + model
+      return "OSTT dictation. Click to start."
     }
     onPressed: function(b) {
       if (b === Qt.RightButton) {

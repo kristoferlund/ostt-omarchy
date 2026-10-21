@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# omarchy:summary=Remove OSTT dictation from Omarchy
+
+set -e
+
+ostt-dictate cancel 2>/dev/null || true
+backend_config="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/defaults/dictation"
+if [[ -f $backend_config && $(< "$backend_config") == "ostt" ]]; then
+  rm "$backend_config"
+fi
+hyprctl reload >/dev/null
+echo "OSTT is no longer the dictation backend. OSTT itself is still installed."

@@ -1,0 +1,156 @@
+#!/bin/bash
+
+# Records from the default microphone without a terminal, then hands the
+# recording to `ostt transcribe --paste`. Each command returns at once; the
+# recorder and the transcription run in the background.
+#
+#   ostt-dictate start | stop | toggle | cancel
+#   ostt-dictate status [--json] [--follow]
+
+set -u
+
+dir="${XDG_RUNTIME_DIR:-/tmp/ostt-dictate-$UID}/ostt-dictate"
+audio="$dir/recording.wav"
+recorder_pid="$dir/recorder.pid"
+worker_pid="$dir/worker.pid"
+error_file="$dir/error"
+
+mkdir -p "$dir" && chmod 700 "$dir"
+
+notify() {
+  notify-send -a OSTT -i audio-input-microphone "$1" "$2" 2>/dev/null || true
+}
+
+fail() {
+  echo "ostt-dictate: $1" >&2
+  notify "Dictation failed" "$1"
+  exit 1
+}
+
+# True while the process in the pid file is alive and still the one we started.
+running() {
+  local pid
+  pid=$(cat "$1" 2>/dev/null) || return 1
+  [[ $pid =~ ^[0-9]+$ ]] && grep -qa "$2" "/proc/$pid/cmdline" 2>/dev/null
+}
+
+recording() { running "$recorder_pid" pw-record; }
+transcribing() { running "$worker_pid" ostt-dictate; }
+
+state() {
+  if recording; then
+    echo recording
+  elif transcribing; then
+    echo transcribing
+  elif [[ -s $error_file ]]; then
+    echo error
+  else
+    echo idle
+  fi
+}
+
+# Press and release of a hold key arrive almost together; take turns.
+lock() {
+  exec 8>"$dir/lock"
+  flock -w 10 8 || fail "Dictation is busy; try again."
+}
+
+# Sends SIGINT so pw-record finishes the WAV header, and waits for it.
+stop_recorder() {
+  local pid
+  pid=$(cat "$recorder_pid")
+  kill -INT "$pid" 2>/dev/null
+  for _ in {1..40}; do
+    recording || break
+    sleep 0.05
+  done
+  recording && kill -KILL "$pid" 2>/dev/null
+  rm -f "$recorder_pid"
+}
+
+start() {
+  recording && return 0
+  transcribing && fail "Still transcribing the previous dictation."
+  command -v ostt >/dev/null || fail "OSTT is not installed."
+  # A missing model fails at the key press, not after speaking.
+  ostt model current >/dev/null 2>&1 || fail "No transcription model is selected. Run 'ostt model'."
+
+  rm -f "$error_file" "$audio"
+  setsid pw-record --rate 16000 --channels 1 --format s16 "$audio" \
+    </dev/null >/dev/null 2>"$dir/recorder.log" 8>&- &
+  echo $! >"$recorder_pid"
+  sleep 0.1
+  if ! recording; then
+    rm -f "$recorder_pid"
+    fail "Could not start the microphone: $(tail -n1 "$dir/recorder.log")"
+  fi
+}
+
+stop() {
+  recording || return 0
+  stop_recorder
+  setsid "$0" __transcribe </dev/null >/dev/null 2>&1 8>&- &
+  echo $! >"$worker_pid"
+}
+
+cancel() {
+  if recording; then
+    stop_recorder
+    rm -f "$audio"
+  elif transcribing; then
+    kill -TERM -- "-$(cat "$worker_pid")" 2>/dev/null
+    rm -f "$worker_pid" "$audio"
+  fi
+}
+
+# The background half of stop: transcribe, paste, report failures.
+transcribe() {
+  local output
+  if output=$(ostt transcribe "$audio" --paste 2>&1 >/dev/null); then
+    rm -f "$audio"
+  else
+    # ostt prints its own explanation last; keep the recording for a retry.
+    output=$(printf '%s\n' "$output" | grep -v '^\s*$' | tail -n1)
+    printf '%s\n' "${output:-Transcription failed.}" >"$error_file"
+    notify "Dictation failed" "${output:-Transcription failed.} Retry with: ostt transcribe $audio --paste"
+  fi
+  rm -f "$worker_pid"
+}
+
+status() {
+  local json="" follow="" last="" current
+  for arg in "$@"; do
+    case $arg in
+      --json) json=1 ;;
+      --follow) follow=1 ;;
+      *) echo "Usage: ostt-dictate status [--json] [--follow]" >&2; exit 1 ;;
+    esac
+  done
+  while :; do
+    current=$(state)
+    if [[ $json ]]; then
+      current=$(jq -cn --arg state "$current" --rawfile error <(cat "$error_file" 2>/dev/null) \
+        '{state: $state} + (if $state == "error" then {error: ($error | rtrimstr("\n"))} else {} end)')
+    fi
+    if [[ $current != "$last" ]]; then
+      # Exit once the reader (a bar widget) goes away.
+      printf '%s\n' "$current" || exit 0
+      last=$current
+    fi
+    [[ $follow ]] || return 0
+    sleep 0.2
+  done
+}
+
+case "${1:-}" in
+  start) lock; start ;;
+  stop) lock; stop ;;
+  toggle)
+    lock
+    if recording; then stop; else start; fi
+    ;;
+  cancel) lock; cancel ;;
+  status) shift; status "$@" ;;
+  __transcribe) transcribe ;;
+  *) echo "Usage: ostt-dictate <start|stop|toggle|cancel|status [--json] [--follow]>" >&2; exit 1 ;;
+esac

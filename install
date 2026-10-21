@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# Adds OSTT to Omarchy's dictation backends: links the scripts in bin/ into
+# ~/.local/bin, adds a cancel key, and lists OSTT in Setup > Defaults >
+# Dictation. Selecting it there runs the setup. Safe to run again.
+
+set -e
+
+repo=$(dirname "$(realpath "$0")")
+bin="$HOME/.local/bin"
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+shortcuts="$config_home/ostt/shortcuts.lua"
+menu="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
+begin="// omarchy-ostt:begin"
+end="// omarchy-ostt:end"
+entry='"setup.default.dictation.ostt": {"icon":"󰍬","label":"OSTT","checked":"[[ \"$(omarchy-default-dictation)\" == \"ostt\" ]]","action":"omarchy-default-dictation ostt"},'
+
+if ! command -v omarchy-dictation-use >/dev/null; then
+  echo "This Omarchy has no selectable dictation backends. OSTT dictation needs Omarchy 4.5 or later." >&2
+  exit 1
+fi
+
+# Links, so updating the checkout (omarchy plugin update) updates the scripts.
+mkdir -p "$bin"
+for script in "$repo"/bin/*; do
+  target="$bin/${script##*/}"
+  if [[ -e $target && ! -L $target ]]; then
+    echo "Skipped $target: a file of your own is there." >&2
+    continue
+  fi
+  ln -sfn "$script" "$target"
+done
+
+if [[ -e $shortcuts && ! -L $shortcuts ]] && ! grep -q omarchy-ostt:managed "$shortcuts"; then
+  echo "Skipped $shortcuts: a file of your own is there." >&2
+else
+  mkdir -p "${shortcuts%/*}"
+  ln -sfn "$repo/shortcuts.lua" "$shortcuts"
+fi
+
+# The menu extension is the user's file: only the marked block is ours.
+mkdir -p "${menu%/*}"
+[[ -s $menu ]] || printf '{\n}\n' >"$menu"
+temporary=$(mktemp "$menu.XXXXXX")
+trap 'rm -f "$temporary"' EXIT
+# Passed through the environment: awk -v would eat the backslashes.
+BEGIN_MARK=$begin END_MARK=$end ENTRY=$entry awk '
+  BEGIN { begin = ENVIRON["BEGIN_MARK"]; end = ENVIRON["END_MARK"]; entry = ENVIRON["ENTRY"] }
+  { line = $0; gsub(/^[ \t]+|[ \t]+$/, "", line) }
+  line == begin { skip = 1; next }
+  skip && line == end { skip = 0; next }
+  skip { next }
+  { print }
+  !done && line == "{" { print "  " begin; print "  " entry; print "  " end; done = 1 }
+  END { exit !done }
+' "$menu" >"$temporary" || {
+  echo "Could not find the opening brace on its own line in $menu; add this entry by hand:" >&2
+  echo "  $entry" >&2
+  exit 1
+}
+cat "$temporary" >"$menu"
+
+echo "OSTT is now listed in Setup > Defaults > Dictation."
+echo "Select it there, or run: omarchy default dictation ostt"

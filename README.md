@@ -1,8 +1,45 @@
-# OSTT Dictation for the Omarchy bar
+# OSTT dictation for Omarchy
 
-A bar widget for [OSTT](https://ostt.ai) dictation in Omarchy 4.5 or later. It shows
-whether OSTT is recording or transcribing, and lets you start, stop and cancel
-dictation with the mouse.
+Use [OSTT](https://ostt.ai) as the dictation backend in Omarchy 4.5 or later.
+Hold Right Alt or F9 and speak; OSTT transcribes with the model you chose,
+local or cloud, and pastes into the focused app.
+
+This repo has three parts:
+
+- `ostt-dictate` records from the default microphone without a terminal and
+  hands the recording to `ostt transcribe --paste`.
+- The Omarchy backend scripts, which run `ostt-dictate` from Omarchy's
+  dictation keys and list OSTT in Setup > Defaults > Dictation.
+- A bar widget that shows whether OSTT is recording or transcribing.
+
+## Install
+
+```bash
+omarchy plugin add https://github.com/kristoferlund/omarchy-ostt.git --enable
+~/.config/omarchy/plugins/ostt.dictation/install
+```
+
+Then select OSTT in Setup > Defaults > Dictation. The setup installs OSTT from
+the AUR if it is missing, asks for a transcription model if none is selected,
+and offers to keep a local model loaded so dictation starts instantly.
+
+`omarchy plugin update ostt.dictation` updates everything. `./uninstall` in the
+same folder switches dictation away from OSTT and removes the scripts; OSTT
+itself stays installed.
+
+## Keys
+
+| Key | Action |
+| --- | --- |
+| Right Alt or F9 (hold) | Record while held, paste on release |
+| Super + Ctrl + X | Start, or stop and paste |
+| Super + Ctrl + Alt + X | Cancel without pasting |
+
+OSTT records from the default input device; pick it in Omarchy's audio
+settings. A failed transcription keeps the recording and the notification tells
+you how to retry it.
+
+## Bar widget
 
 | State | Icon |
 | --- | --- |
@@ -14,35 +51,18 @@ dictation with the mouse.
 Left-click starts dictation, or stops it and pastes into the focused app.
 Right-click cancels a recording or a pending transcription.
 
-The widget is only a view. Recordings run in OSTT's own background job, so the
-same dictation can be started with Omarchy's keys and stopped from the bar, and
-reloading the bar never abandons a recording.
-
-## Install
-
-OSTT must be installed and set up as the dictation backend first:
-
-```bash
-curl -fsSL https://ostt.ai/install | bash
-ostt omarchy setup          # only needed for AUR installs; the installer does it
-omarchy default dictation ostt
-```
-
-Then add the widget:
-
-```bash
-omarchy plugin add https://github.com/kristoferlund/omarchy-ostt.git --enable
-```
-
-## Settings
-
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `hideWhenIdle` | `false` | Show the widget only while recording, transcribing, or right after an error |
 
-## How it works
+## ostt-dictate
 
-The widget runs `ostt dictate status --json --follow`, which prints a JSON line
-whenever the dictation state changes, and calls `ostt dictate toggle` and
-`ostt dictate cancel` for the buttons. See the
-[OSTT docs](https://ostt.ai/guide/platforms/hyprland#dictation-backend) for the full interface.
+```
+ostt-dictate start | stop | toggle | cancel
+ostt-dictate status [--json] [--follow]
+```
+
+Each command returns at once; recording and transcription run in the
+background. `status --json --follow` prints a line such as
+`{"state":"recording"}` whenever the state changes. The states are `idle`,
+`recording`, `transcribing` and `error`.
