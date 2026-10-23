@@ -20,7 +20,7 @@ recorder_pid="$dir/recorder.pid"
 worker_pid="$dir/worker.pid"
 error_file="$dir/error"
 levels="$dir/levels"
-context="$dir/context.png"
+context="$dir/context.jpg"
 action_file="$dir/action"
 config="${XDG_CONFIG_HOME:-$HOME/.config}/ostt/dictate.toml"
 
@@ -97,7 +97,8 @@ EOF
     notify "Dictating without context" "$class is set to '$action', which is not a processing action in ostt.toml."
     return 0
   fi
-  if ! grim -g "$(jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' <<<"$win")" "$context" 2>/dev/null; then
+  # JPEG at 60% keeps small text legible at a fraction of the PNG size.
+  if ! grim -t jpeg -q 60 -g "$(jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' <<<"$win")" "$context" 2>/dev/null; then
     notify "Dictating without context" "Could not take a screenshot of $class."
     return 0
   fi
