@@ -19,7 +19,10 @@ setup_context() {
   local tools=() tool model
   grep -q '^\[process\.actions\.screen-context\]' "$ostt_config" 2>/dev/null && return 0
   # Older OSTT cannot send the screenshot to the action.
-  ostt process --help 2>/dev/null | grep -q -- --attach || return 0
+  if ! ostt process --help 2>/dev/null | grep -q -- --attach; then
+    echo "Context-aware dictation needs a newer OSTT (ostt process --attach); skipped."
+    return 0
+  fi
 
   echo
   echo "Context-aware dictation: in apps you choose, OSTT sends a screenshot of"
