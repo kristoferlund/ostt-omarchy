@@ -11,6 +11,9 @@
 #   ostt-dictate start | stop | toggle | cancel
 #   ostt-dictate status [--json] [--follow]
 #   ostt-dictate levels   follow the input level while recording
+#   ostt-dictate apps     JSON: processing actions, and the apps on visible
+#                         workspaces or in the config, with their action
+#   ostt-dictate map <class> [action]   set an app's action; none clears it
 
 set -u
 
@@ -180,6 +183,89 @@ transcribe() {
   rm -f "$worker_pid" "$action_file"
 }
 
+# Reads [apps] from the config as a JSON object of class -> action.
+config_apps() {
+  [[ -f $config ]] || { echo '{}'; return 0; }
+  python3 - "$config" <<'EOF'
+import json, sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    apps = tomllib.load(f).get("apps", {})
+if not isinstance(apps, dict):
+    sys.exit("[apps] must be a table")
+print(json.dumps({k: v for k, v in apps.items() if isinstance(v, str)}))
+EOF
+}
+
+apps() {
+  local clients workspaces mapped actions error=""
+  clients=$(hyprctl clients -j 2>/dev/null) || clients='[]'
+  workspaces=$(hyprctl monitors -j 2>/dev/null | jq '[.[].activeWorkspace.id]') || workspaces='[]'
+  if ! mapped=$(config_apps 2>&1); then
+    error="Could not read $config: ${mapped##*$'\n'}"
+    mapped='{}'
+  fi
+  actions=$(ostt process list --format json 2>/dev/null) || actions='[]'
+  jq -n --argjson clients "$clients" --argjson workspaces "$workspaces" \
+    --argjson mapped "$mapped" --argjson actions "$actions" --arg error "$error" '
+    ($clients
+      | map(select(.class != "" and (.workspace.id as $id | $workspaces | index($id))))
+      | group_by(.class) | map({class: .[0].class, title: .[0].title})) as $visible
+    | ($mapped | keys - ($visible | map(.class)) | map({class: ., title: ""})) as $elsewhere
+    | {error: $error, actions: $actions,
+       apps: (($visible + $elsewhere) | map(. + {action: ($mapped[.class] // "")}))}'
+}
+
+# Sets or clears one app's entry under [apps], keeping the rest of the file
+# as written, and replaces the file only once the result parses.
+map_app() {
+  [[ ${1:-} ]] || { echo "Usage: ostt-dictate map <class> [action]" >&2; exit 1; }
+  mkdir -p "${config%/*}"
+  python3 - "$config" "$1" "${2:-}" <<'EOF'
+import json, os, re, sys, tempfile, tomllib
+path, app, action = sys.argv[1:4]
+try:
+    with open(path) as f:
+        lines = f.read().splitlines()
+except FileNotFoundError:
+    lines = []
+
+key = re.compile(r'^\s*(?:"((?:[^"\\]|\\.)*)"|([A-Za-z0-9_-]+))\s*=')
+def key_of(line):
+    m = key.match(line)
+    if not m:
+        return None
+    return json.loads(f'"{m.group(1)}"') if m.group(1) is not None else m.group(2)
+
+start = next((i for i, l in enumerate(lines) if l.strip() == "[apps]"), None)
+if start is None:
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.append("[apps]")
+    start = len(lines) - 1
+end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
+section = [l for l in lines[start + 1:end] if key_of(l) != app]
+if action:
+    last_key = max((i for i, l in enumerate(section) if key_of(l) is not None), default=-1)
+    section.insert(last_key + 1, f"{json.dumps(app, ensure_ascii=False)} = {json.dumps(action, ensure_ascii=False)}")
+text = "\n".join(lines[:start + 1] + section + lines[end:]) + "\n"
+
+try:
+    tomllib.loads("\n".join(lines))
+    updated = tomllib.loads(text).get("apps", {}).get(app)
+except tomllib.TOMLDecodeError as e:
+    sys.exit(f"{path} is not valid TOML: {e}")
+if updated != (action or None):
+    sys.exit(f"Could not update {path}")
+target = os.path.realpath(path)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".dictate.")
+with os.fdopen(fd, "w") as f:
+    f.write(text)
+if os.path.exists(target):
+    os.chmod(tmp, os.stat(target).st_mode & 0o777)
+os.replace(tmp, target)
+EOF
+}
+
 status() {
   local json="" follow="" last="" current
   for arg in "$@"; do
@@ -215,6 +301,8 @@ case "${1:-}" in
   cancel) lock; cancel ;;
   status) shift; status "$@" ;;
   levels) exec tail -n0 -F "$levels" 2>/dev/null ;;
+  apps) apps ;;
+  map) shift; map_app "$@" ;;
   __transcribe) transcribe ;;
-  *) echo "Usage: ostt-dictate <start|stop|toggle|cancel|status [--json] [--follow]|levels>" >&2; exit 1 ;;
+  *) echo "Usage: ostt-dictate <start|stop|toggle|cancel|status [--json] [--follow]|levels|apps|map <class> [action]>" >&2; exit 1 ;;
 esac

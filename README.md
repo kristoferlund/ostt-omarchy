@@ -58,9 +58,12 @@ such as "finish this sentence as a haiku". Every other app keeps plain
 transcription, and no screenshot is taken.
 
 The setup offers it and adds a `screen-context` processing action to
-`~/.config/ostt/ostt.toml`; edit its prompt there. List the apps in
-`~/.config/ostt/dictate.toml` by Hyprland window class, each with the action
-to run:
+`~/.config/ostt/ostt.toml`; edit its prompt there. To choose the apps,
+right-click the bar widget: it lists the apps on the visible workspaces, and
+any already set up, each with a dropdown of your processing actions. The
+choice applies to every window of that app. It is saved in
+`~/.config/ostt/dictate.toml` by Hyprland window class, which you can also
+edit by hand:
 
 ```toml
 [apps]
@@ -68,7 +71,6 @@ to run:
 "thunderbird" = "my-own-action"
 ```
 
-`hyprctl clients -j | jq -r '.[].class'` lists the classes of open windows.
 Any AI action using Claude Code, Codex or OpenCode receives the screenshot; a
 bash action gets its path in `$OSTT_ATTACHMENT`. Gemini CLI actions can't take
 an image yet, so dictation in an app mapped to one fails. If something is wrong
@@ -95,7 +97,8 @@ in the notification works.
 | Failed | crossed-out microphone for 15 seconds; the tooltip has the error |
 
 Left-click starts dictation, or stops it and pastes into the focused app.
-Right-click cancels a recording or a pending transcription.
+Right-click cancels a recording or a pending transcription; otherwise it opens
+the list of apps for context-aware dictation.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
