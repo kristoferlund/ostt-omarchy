@@ -48,6 +48,28 @@ it and transcribes. During transcription the meter becomes a moving wave and the
 ✓ a spinner; the pill fades out once the text is pasted. It never takes
 keyboard focus, so the text still lands in the app you were typing in.
 
+## Context-aware dictation
+
+In apps you choose, dictation also takes a screenshot of the window and sends
+it with your words to an AI agent (Claude Code, Codex or OpenCode), so names,
+terms and tone match what is on screen. Every other app keeps plain
+transcription, and no screenshot is taken.
+
+The setup offers it and adds a `screen-context` processing action to
+`~/.config/ostt/ostt.toml`. List the apps in `~/.config/ostt/omarchy.toml` by
+Hyprland window class (`hyprctl activewindow` shows it), each with the action
+to run:
+
+```toml
+[apps]
+"Slack" = "screen-context"
+"thunderbird" = "my-own-action"
+```
+
+Any processing action works; it gets the screenshot through
+`ostt process --attach`. If the action fails, the transcript is still in
+`ostt history` and the notification shows how to retry.
+
 ## Bar widget
 
 | State | Icon |

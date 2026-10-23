@@ -4,6 +4,10 @@
 # recording to `ostt transcribe --paste`. Each command returns at once; the
 # recorder and the transcription run in the background.
 #
+# Apps listed in ~/.config/ostt/omarchy.toml get context-aware dictation: a
+# screenshot of the window is taken at start, and the transcript goes through
+# the listed processing action with the screenshot attached.
+#
 #   ostt-dictate start | stop | toggle | cancel
 #   ostt-dictate status [--json] [--follow]
 #   ostt-dictate levels   follow the input level while recording
@@ -16,6 +20,9 @@ recorder_pid="$dir/recorder.pid"
 worker_pid="$dir/worker.pid"
 error_file="$dir/error"
 levels="$dir/levels"
+context="$dir/context.png"
+action_file="$dir/action"
+config="${XDG_CONFIG_HOME:-$HOME/.config}/ostt/omarchy.toml"
 
 mkdir -p "$dir" && chmod 700 "$dir"
 
@@ -57,6 +64,26 @@ lock() {
   flock -w 10 8 || fail "Dictation is busy; try again."
 }
 
+# Looks up the focused app in the config. A listed app gets its action and a
+# screenshot of its window; any other app gets plain dictation.
+pick_action() {
+  [[ -f $config ]] || return 0
+  local win class action
+  win=$(hyprctl activewindow -j 2>/dev/null) || return 0
+  class=$(jq -r '.class // empty' <<<"$win" 2>/dev/null)
+  [[ $class ]] || return 0
+  action=$(python3 - "$config" "$class" <<'EOF'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    print(tomllib.load(f).get("apps", {}).get(sys.argv[2], ""))
+EOF
+  ) || fail "Could not read $config."
+  [[ $action ]] || return 0
+  grim -g "$(jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' <<<"$win")" "$context" 2>/dev/null ||
+    fail "Could not take a screenshot of $class."
+  printf '%s\n' "$action" >"$action_file"
+}
+
 # Sends SIGINT so ffmpeg finishes the WAV header, and waits for it.
 stop_recorder() {
   local pid
@@ -77,7 +104,9 @@ start() {
   # A missing model fails at the key press, not after speaking.
   ostt model current >/dev/null 2>&1 || fail "No transcription model is selected. Run 'ostt model'."
 
-  rm -f "$error_file" "$audio"
+  rm -f "$error_file" "$audio" "$context" "$action_file"
+  # Before the popup appears, while the app is still the active window.
+  pick_action
   : >"$levels"
   # One capture: 16 kHz mono WAV for OSTT, and the RMS level every 50 ms for
   # the popup's meter.
@@ -110,20 +139,32 @@ cancel() {
     kill -TERM -- "-$(cat "$worker_pid")" 2>/dev/null
     rm -f "$worker_pid" "$audio"
   fi
+  rm -f "$context" "$action_file"
 }
 
-# The background half of stop: transcribe, paste, report failures.
+# The background half of stop: transcribe, process, paste, report failures.
+# With an action, the transcript is saved to history first, so a failed action
+# can be retried with `ostt process`.
 transcribe() {
-  local output
-  if output=$(ostt transcribe "$audio" --paste 2>&1 >/dev/null); then
+  local output retry="" action
+  action=$(cat "$action_file" 2>/dev/null)
+  if [[ ! $action ]]; then
+    output=$(ostt transcribe "$audio" --paste 2>&1 >/dev/null) || retry="ostt transcribe $audio --paste"
+  elif ! output=$(ostt transcribe "$audio" 2>&1 >/dev/null); then
+    retry="ostt transcribe $audio && ostt process $action --attach $context --paste"
+  elif ! output=$(ostt process "$action" --attach "$context" --paste 2>&1 >/dev/null); then
     rm -f "$audio"
-  else
-    # ostt prints its own explanation last; keep the recording for a retry.
-    output=$(printf '%s\n' "$output" | grep -v '^\s*$' | tail -n1)
-    printf '%s\n' "${output:-Transcription failed.}" >"$error_file"
-    notify "Dictation failed" "${output:-Transcription failed.} Retry with: ostt transcribe $audio --paste"
+    retry="ostt process $action --attach $context --paste"
   fi
-  rm -f "$worker_pid"
+  if [[ $retry ]]; then
+    # ostt prints its own explanation last; keep the files for a retry.
+    output=$(printf '%s\n' "$output" | grep -v '^\s*$' | tail -n1)
+    printf '%s\n' "${output:-Dictation failed.}" >"$error_file"
+    notify "Dictation failed" "${output:-Dictation failed.} Retry with: $retry"
+  else
+    rm -f "$audio" "$context"
+  fi
+  rm -f "$worker_pid" "$action_file"
 }
 
 status() {
