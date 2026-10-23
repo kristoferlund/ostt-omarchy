@@ -4,7 +4,7 @@
 # recording to `ostt transcribe --paste`. Each command returns at once; the
 # recorder and the transcription run in the background.
 #
-# Apps listed in ~/.config/ostt/omarchy.toml get context-aware dictation: a
+# Apps listed in ~/.config/ostt/dictate.toml get context-aware dictation: a
 # screenshot of the window is taken at start, and the transcript goes through
 # the listed processing action with the screenshot attached.
 #
@@ -22,7 +22,7 @@ error_file="$dir/error"
 levels="$dir/levels"
 context="$dir/context.png"
 action_file="$dir/action"
-config="${XDG_CONFIG_HOME:-$HOME/.config}/ostt/omarchy.toml"
+config="${XDG_CONFIG_HOME:-$HOME/.config}/ostt/dictate.toml"
 
 mkdir -p "$dir" && chmod 700 "$dir"
 
@@ -65,22 +65,38 @@ lock() {
 }
 
 # Looks up the focused app in the config. A listed app gets its action and a
-# screenshot of its window; any other app gets plain dictation.
+# screenshot of its window; any other app gets plain dictation. Problems are
+# reported and fall back to plain dictation rather than blocking it.
 pick_action() {
   [[ -f $config ]] || return 0
   local win class action
   win=$(hyprctl activewindow -j 2>/dev/null) || return 0
   class=$(jq -r '.class // empty' <<<"$win" 2>/dev/null)
   [[ $class ]] || return 0
-  action=$(python3 - "$config" "$class" <<'EOF'
+  if ! action=$(python3 - "$config" "$class" 2>&1 <<'EOF'
 import sys, tomllib
 with open(sys.argv[1], "rb") as f:
-    print(tomllib.load(f).get("apps", {}).get(sys.argv[2], ""))
+    apps = tomllib.load(f).get("apps", {})
+if not isinstance(apps, dict):
+    sys.exit("[apps] must be a table")
+action = apps.get(sys.argv[2], "")
+if not isinstance(action, str):
+    sys.exit(f'"{sys.argv[2]}" must name a processing action')
+print(action)
 EOF
-  ) || fail "Could not read $config."
+  ); then
+    notify "Dictating without context" "Could not read $config: ${action##*$'\n'}"
+    return 0
+  fi
   [[ $action ]] || return 0
-  grim -g "$(jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' <<<"$win")" "$context" 2>/dev/null ||
-    fail "Could not take a screenshot of $class."
+  if ! ostt process list --format json 2>/dev/null | jq -e --arg id "$action" 'any(.[]; .id == $id)' >/dev/null; then
+    notify "Dictating without context" "$class is set to '$action', which is not a processing action in ostt.toml."
+    return 0
+  fi
+  if ! grim -g "$(jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' <<<"$win")" "$context" 2>/dev/null; then
+    notify "Dictating without context" "Could not take a screenshot of $class."
+    return 0
+  fi
   printf '%s\n' "$action" >"$action_file"
 }
 
@@ -105,8 +121,6 @@ start() {
   ostt model current >/dev/null 2>&1 || fail "No transcription model is selected. Run 'ostt model'."
 
   rm -f "$error_file" "$audio" "$context" "$action_file"
-  # Before the popup appears, while the app is still the active window.
-  pick_action
   : >"$levels"
   # One capture: 16 kHz mono WAV for OSTT, and the RMS level every 50 ms for
   # the popup's meter.
@@ -120,6 +134,9 @@ start() {
     rm -f "$recorder_pid"
     fail "Could not start the microphone: $(tail -n1 "$dir/recorder.log")"
   fi
+  # After the microphone starts, so the first word isn't lost; before the
+  # popup appears, though it never takes focus anyway.
+  pick_action
   # Show the recording popup when the Omarchy shell is running.
   omarchy-shell -q shell summon ostt.dictation '{}' </dev/null >/dev/null 2>&1 8>&- &
 }
@@ -143,26 +160,17 @@ cancel() {
 }
 
 # The background half of stop: transcribe, process, paste, report failures.
-# With an action, the transcript is saved to history first, so a failed action
-# can be retried with `ostt process`.
 transcribe() {
-  local output retry="" action
+  local output action args=(--paste)
   action=$(cat "$action_file" 2>/dev/null)
-  if [[ ! $action ]]; then
-    output=$(ostt transcribe "$audio" --paste 2>&1 >/dev/null) || retry="ostt transcribe $audio --paste"
-  elif ! output=$(ostt transcribe "$audio" 2>&1 >/dev/null); then
-    retry="ostt transcribe $audio && ostt process $action --attach $context --paste"
-  elif ! output=$(ostt process "$action" --attach "$context" --paste 2>&1 >/dev/null); then
-    rm -f "$audio"
-    retry="ostt process $action --attach $context --paste"
-  fi
-  if [[ $retry ]]; then
+  [[ $action ]] && args+=(--process "$action" --attach "$context")
+  if output=$(ostt transcribe "$audio" "${args[@]}" 2>&1 >/dev/null); then
+    rm -f "$audio" "$context"
+  else
     # ostt prints its own explanation last; keep the files for a retry.
     output=$(printf '%s\n' "$output" | grep -v '^\s*$' | tail -n1)
-    printf '%s\n' "${output:-Dictation failed.}" >"$error_file"
-    notify "Dictation failed" "${output:-Dictation failed.} Retry with: $retry"
-  else
-    rm -f "$audio" "$context"
+    printf '%s\n' "${output:-Transcription failed.}" >"$error_file"
+    notify "Dictation failed" "${output:-Transcription failed.} Retry with: ostt transcribe $audio ${args[*]}"
   fi
   rm -f "$worker_pid" "$action_file"
 }

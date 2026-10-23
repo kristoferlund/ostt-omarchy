@@ -16,7 +16,7 @@ This repo has four parts:
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/kristoferlund/ostt-omarchy.git --enable
+omarchy plugin add https://github.com/kristoferlund/ostt-omarchy-dictate.git --enable
 ~/.config/omarchy/plugins/ostt.dictation/install
 ```
 
@@ -26,7 +26,8 @@ and offers to keep a local model loaded so dictation starts instantly.
 
 `omarchy plugin update ostt.dictation --yes` updates everything (without `--yes`, Omarchy shows the code changes and asks first). `./uninstall` in the
 same folder switches dictation away from OSTT and removes the scripts; OSTT
-itself stays installed.
+itself stays installed, and so do `~/.config/ostt/dictate.toml` and the
+`screen-context` action in `ostt.toml`.
 
 ## Keys
 
@@ -51,13 +52,14 @@ keyboard focus, so the text still lands in the app you were typing in.
 ## Context-aware dictation
 
 In apps you choose, dictation also takes a screenshot of the window and sends
-it with your words to an AI agent (Claude Code, Codex or OpenCode), so names,
-terms and tone match what is on screen. Every other app keeps plain
+it with your words to an AI agent (Claude Code, Codex or OpenCode). The agent
+fixes names and terms to match the screen, and carries out spoken instructions
+such as "finish this sentence as a haiku". Every other app keeps plain
 transcription, and no screenshot is taken.
 
 The setup offers it and adds a `screen-context` processing action to
-`~/.config/ostt/ostt.toml`. List the apps in `~/.config/ostt/omarchy.toml` by
-Hyprland window class (`hyprctl activewindow` shows it), each with the action
+`~/.config/ostt/ostt.toml`; edit its prompt there. List the apps in
+`~/.config/ostt/dictate.toml` by Hyprland window class, each with the action
 to run:
 
 ```toml
@@ -66,9 +68,14 @@ to run:
 "thunderbird" = "my-own-action"
 ```
 
-Any processing action works; it gets the screenshot through
-`ostt process --attach`. If the action fails, the transcript is still in
-`ostt history` and the notification shows how to retry.
+`hyprctl clients | grep class` lists the classes of open windows. Any AI action
+using Claude Code, Codex or OpenCode receives the screenshot; a bash action gets
+its path in `$OSTT_ATTACHMENT`. If something is wrong with an app's entry, or
+the screenshot fails, that dictation falls back to plain transcription and a
+notification says why.
+
+The agent takes a few seconds, and the text is pasted into whichever window is
+focused when it finishes.
 
 ## Bar widget
 
