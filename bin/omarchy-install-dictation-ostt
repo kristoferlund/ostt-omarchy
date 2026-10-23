@@ -17,12 +17,29 @@ has_action() {
   ostt process list --format json 2>/dev/null | jq -e --arg id "$1" 'any(.[]; .id == $id)' >/dev/null
 }
 
+# Writes dictate.toml, where the user lists the apps that use context.
+write_plugin_config() {
+  [[ -e $plugin_config ]] && return 0
+  cat >"$plugin_config" <<'EOF'
+# Apps that get context-aware dictation. OSTT sends a screenshot of the window
+# along with your words to the processing action named here (see ostt.toml).
+# Keys are Hyprland window classes. `hyprctl clients -j | jq -r '.[].class'`
+# lists those of open windows; web apps have long generated ones (chrome-...).
+# Apps not listed get plain transcription.
+[apps]
+# "Slack" = "screen-context"
+EOF
+}
+
 # Offers context-aware dictation until it is set up: adds a screen-context
-# processing action to ostt.toml and writes dictate.toml, where the user lists
-# the apps that use it.
+# processing action to ostt.toml and writes dictate.toml. Never stops the rest
+# of the setup: it is called in a condition, and each step checks for failure.
 setup_context() {
-  local tools=() tool model candidate
-  has_action screen-context && return 0
+  local tools=() tool model models candidate target
+  if has_action screen-context; then
+    write_plugin_config
+    return 0
+  fi
   if ! ostt transcribe --help 2>/dev/null | grep -q -- --attach; then
     echo "Context-aware dictation needs a newer OSTT (ostt transcribe --attach); skipped."
     return 0
@@ -56,7 +73,11 @@ setup_context() {
       ;;
     OpenCode)
       tool=opencode
-      model=$(opencode models 2>/dev/null | gum filter --header "Which model?") || return 0
+      if ! models=$(opencode models 2>/dev/null) || [[ ! $models ]]; then
+        echo "Could not list OpenCode models; context-aware dictation was not set up."
+        return 0
+      fi
+      model=$(gum filter --header "Which model?" <<<"$models") || return 0
       ;;
   esac
   if [[ ! $model =~ ^[A-Za-z0-9._:/@-]+$ ]]; then
@@ -72,9 +93,9 @@ setup_context() {
 
   # Append to a copy and let OSTT load it before replacing the real file, so
   # a config this cannot extend is left untouched.
-  candidate=$(mktemp -d)
+  candidate=$(mktemp -d) || return 0
   mkdir "$candidate/ostt"
-  cat "$ostt_config" >"$candidate/ostt/ostt.toml"
+  cp "$ostt_config" "$candidate/ostt/ostt.toml"
   cat >>"$candidate/ostt/ostt.toml" <<EOF
 
 [process.actions.screen-context]
@@ -102,21 +123,20 @@ EOF
     rm -rf "$candidate"
     return 0
   fi
-  # Write through the file, so a symlinked config (dotfiles) stays a symlink.
-  cat "$candidate/ostt/ostt.toml" >"$ostt_config"
+  # Replace the file the config resolves to in one rename, so it is never half
+  # written and a symlinked config (dotfiles) stays a symlink.
+  target=$(realpath "$ostt_config")
+  if ! { cp "$candidate/ostt/ostt.toml" "$target.new" &&
+    chmod --reference="$target" "$target.new" &&
+    mv "$target.new" "$target"; }; then
+    rm -f "$target.new"
+    rm -rf "$candidate"
+    echo "Could not write $target; it was left unchanged."
+    return 0
+  fi
   rm -rf "$candidate"
 
-  if [[ ! -e $plugin_config ]]; then
-    cat >"$plugin_config" <<'EOF'
-# Apps that get context-aware dictation. OSTT sends a screenshot of the window
-# along with your words to the processing action named here (see ostt.toml).
-# Keys are Hyprland window classes; `hyprctl activewindow` shows the class of
-# the focused window. Web apps have long generated classes (chrome-...-Default).
-# Apps not listed get plain transcription.
-[apps]
-# "Slack" = "screen-context"
-EOF
-  fi
+  write_plugin_config
   echo "Added the screen-context action. List the apps that use it in $plugin_config"
 }
 
@@ -154,7 +174,7 @@ case $model in
     ;;
 esac
 
-setup_context
+setup_context || echo "Context-aware dictation was not set up."
 
 omarchy-dictation-use ostt
 hyprctl reload >/dev/null

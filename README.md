@@ -68,14 +68,22 @@ to run:
 "thunderbird" = "my-own-action"
 ```
 
-`hyprctl clients | grep class` lists the classes of open windows. Any AI action
-using Claude Code, Codex or OpenCode receives the screenshot; a bash action gets
-its path in `$OSTT_ATTACHMENT`. If something is wrong with an app's entry, or
-the screenshot fails, that dictation falls back to plain transcription and a
-notification says why.
+`hyprctl clients -j | jq -r '.[].class'` lists the classes of open windows.
+Any AI action using Claude Code, Codex or OpenCode receives the screenshot; a
+bash action gets its path in `$OSTT_ATTACHMENT`. Gemini CLI actions can't take
+an image yet, so dictation in an app mapped to one fails. If something is wrong
+with an app's entry, or the screenshot fails, that dictation falls back to
+plain transcription and a notification says why.
 
 The agent takes a few seconds, and the text is pasted into whichever window is
-focused when it finishes.
+focused when it finishes. Super + Ctrl + Alt + X cancels a dictation that is
+taking too long.
+
+The screenshot is a capture of the window's area of the screen, so anything on
+top of it, such as a notification, is included. It is kept in
+`$XDG_RUNTIME_DIR/ostt-dictate` (readable only by you) until the dictation
+finishes, and after a failure until the next dictation, so the retry command
+in the notification works.
 
 ## Bar widget
 

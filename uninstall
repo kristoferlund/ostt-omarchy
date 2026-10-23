@@ -23,8 +23,8 @@ if [[ -f $menu ]]; then
   trap 'rm -f "$temporary"' EXIT
   awk '
     { line = $0; gsub(/^[ \t]+|[ \t]+$/, "", line) }
-    line == "// ostt-omarchy:begin" { skip = 1; next }
-    skip && line == "// ostt-omarchy:end" { skip = 0; next }
+    line == "// ostt-omarchy-dictate:begin" { skip = 1; next }
+    skip && line == "// ostt-omarchy-dictate:end" { skip = 0; next }
     !skip { print }
   ' "$menu" >"$temporary"
   cat "$temporary" >"$menu"
