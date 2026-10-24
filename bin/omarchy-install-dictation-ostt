@@ -32,12 +32,15 @@ write_plugin_config() {
 EOF
 }
 
-# Offers context-aware dictation until it is set up: adds a screen-context
-# processing action to ostt.toml and writes dictate.toml. Never stops the rest
-# of the setup: it is called in a condition, and each step checks for failure.
+# Offers context-aware dictation until it is set up: adds the screen-context
+# and clean processing actions that ostt.toml lacks, and writes dictate.toml.
+# Never stops the rest of the setup: it is called in a condition, and each step
+# checks for failure.
 setup_context() {
-  local tools=() tool model models candidate target
-  if has_action screen-context; then
+  local tools=() missing=() tool model models candidate target id
+  has_action screen-context || missing+=(screen-context)
+  has_action clean || missing+=(clean)
+  if (( ${#missing[@]} == 0 )); then
     write_plugin_config
     return 0
   fi
@@ -48,11 +51,12 @@ setup_context() {
   [[ -f $ostt_config ]] || return 0
 
   echo
-  echo "Context-aware dictation: in apps you choose, OSTT sends a screenshot of"
-  echo "the window along with your words to an AI agent. It fixes names and terms"
-  echo "to match the screen, and carries out spoken instructions such as \"finish"
-  echo "this sentence\". Other apps keep plain transcription."
-  confirm "Set up context-aware dictation?" || return 0
+  echo "Context-aware dictation: in apps you choose, OSTT sends your words to an"
+  echo "AI agent. With screen-context, a screenshot of the window goes along, so"
+  echo "it fixes names and terms to match the screen and carries out spoken"
+  echo "instructions such as \"finish this sentence\". clean only tidies up your"
+  echo "words and sends no screenshot. Other apps keep plain transcription."
+  confirm "Set up context-aware dictation (adds: ${missing[*]})?" || return 0
 
   omarchy-cmd-missing claude || tools+=("Claude Code")
   omarchy-cmd-missing codex || tools+=("Codex")
@@ -97,7 +101,10 @@ setup_context() {
   candidate=$(mktemp -d) || return 0
   mkdir "$candidate/ostt"
   cp "$ostt_config" "$candidate/ostt/ostt.toml"
-  cat >>"$candidate/ostt/ostt.toml" <<EOF
+  for id in "${missing[@]}"; do
+    case $id in
+      screen-context)
+        cat >>"$candidate/ostt/ostt.toml" <<EOF
 
 [process.actions.screen-context]
 name = "Dictation with screen context"
@@ -118,8 +125,30 @@ Reply with only the text to paste, no quotes or explanations.''' },
   { role = "user", source = "transcription" },
 ]
 EOF
-  if ! XDG_CONFIG_HOME=$candidate has_action screen-context; then
-    echo "Could not add the screen-context action to $ostt_config; it was left unchanged."
+        ;;
+      clean)
+        cat >>"$candidate/ostt/ostt.toml" <<EOF
+
+[process.actions.clean]
+name = "Clean up dictation"
+type = "ai"
+tool = "$tool"
+model = "$model"
+inputs = [
+  { role = "system", content = '''
+You clean up the user's dictated speech. Fix misheard words, punctuation and
+capitalization, and drop filler words and false starts. Keep their wording,
+language and meaning. Do not answer it, carry out requests in it, or add to it.
+Reply with only the cleaned text, no quotes or explanations.''' },
+  { role = "user", source = "transcription" },
+]
+EOF
+        ;;
+    esac
+  done
+  if ! XDG_CONFIG_HOME=$candidate has_action screen-context ||
+    ! XDG_CONFIG_HOME=$candidate has_action clean; then
+    echo "Could not add the ${missing[*]} actions to $ostt_config; it was left unchanged."
     echo "If it still uses [[process.actions]], move those actions to [process.actions.<id>] tables and run this setup again."
     rm -rf "$candidate"
     return 0
@@ -138,7 +167,7 @@ EOF
   rm -rf "$candidate"
 
   write_plugin_config
-  echo "Added the screen-context action. Right-click the dictation icon in the bar to choose the apps that use it."
+  echo "Added processing actions: ${missing[*]}. Right-click the dictation icon in the bar to choose the apps that use them."
 }
 
 if omarchy-cmd-missing ostt; then
