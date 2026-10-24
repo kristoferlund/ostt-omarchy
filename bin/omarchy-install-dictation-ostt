@@ -9,26 +9,194 @@ confirm() {
   gum confirm --affirmative "$(omarchy-i18n common.yes)" --negative "$(omarchy-i18n common.no)" "$1"
 }
 
+# Prints a paragraph wrapped at word boundaries to the terminal, at most 80
+# columns wide.
+say() {
+  local cols
+  cols=$(tput cols 2>/dev/null) || cols=80
+  (( cols > 80 )) && cols=80
+  fold -s -w "$cols" <<<"$1"
+}
+
+# Starts a step of the setup: a blank line, then its explanation.
+step() {
+  echo
+  say "$1"
+}
+
+repo="$(dirname "$(realpath "$0")")/.."
+source "$repo/lib/ostt-error.sh"
+
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+ostt_config="$config_home/ostt/ostt.toml"
+plugin_config="$config_home/ostt/dictate.toml"
+# How messages name the config, e.g. ~/.config/ostt/ostt.toml.
+shown_config=${ostt_config/#$HOME/\~}
+
+has_action() {
+  ostt process list --format json 2>/dev/null | jq -e --arg id "$1" 'any(.[]; .id == $id)' >/dev/null
+}
+
+# Writes dictate.toml, where the user lists the apps that use context.
+write_plugin_config() {
+  [[ -e $plugin_config ]] && return 0
+  cat >"$plugin_config" <<'EOF'
+# Apps whose dictation goes through a processing action (see ostt.toml). With
+# screenshot = true, a screenshot of the window is sent along with your words.
+# Right-click the bar widget to choose these, or edit them here. Keys are
+# Hyprland window classes. `hyprctl clients -j | jq -r '.[].class'` lists those
+# of open windows; web apps have long generated ones (chrome-...).
+# Apps not listed get plain transcription.
+[apps]
+# "Slack" = { action = "assistant", screenshot = true }
+EOF
+}
+
+# Fills an action template from actions/ for the chosen agent and model.
+fill_action() {
+  local text
+  text=$(<"$repo/actions/$1.toml") || return 1
+  # TOML basic strings escape \ and ".
+  local binary=${4//\\/\\\\}
+  binary=${binary//\"/\\\"}
+  # Quoted replacements, so an & in them is not the matched text (bash 5.2).
+  text=${text//@TOOL@/"$2"}
+  text=${text//@MODEL@/"$3"}
+  text=${text//@BINARY@/"$binary"}
+  printf '%s\n' "$text"
+}
+
+# Offers context-aware dictation until it is set up: adds the assistant and
+# clean processing actions that ostt.toml lacks, and writes dictate.toml.
+# Never stops the rest of the setup: it is called in a condition, and each step
+# checks for failure.
+setup_context() {
+  local agents status missing=() existing=() tool name path models model candidate target id added
+  for id in assistant clean; do
+    if has_action "$id"; then existing+=("$id"); else missing+=("$id"); fi
+  done
+  if (( ${#missing[@]} == 0 )); then
+    write_plugin_config
+    return 0
+  fi
+  if [[ ! -f $ostt_config ]]; then
+    step "Context-aware dictation was skipped: $shown_config does not exist yet. Run this setup again once OSTT has created it."
+    return 0
+  fi
+  # Agents come from OSTT, which knows how to run each one with its tools off.
+  agents=$(ostt agent list --format json 2>&1)
+  status=$?
+  if (( status == 2 )); then
+    step "Context-aware dictation needs a newer OSTT, so it was skipped. Update OSTT and run this setup again to add it."
+    return 0
+  elif (( status != 0 )); then
+    step "Context-aware dictation was not set up: $(ostt_error "$agents" "OSTT could not list its agents.")"
+    return 0
+  fi
+
+  step "Context-aware dictation lets you choose what happens to your words in each app. An AI agent can tidy them up (Text cleanup), or also carry out spoken instructions such as \"reply saying I can't make it\" (Writing assistant). You can let it see a screenshot of the app's window too, so it gets names and terms on screen right. Every other app keeps plain transcription."
+  echo
+  confirm "Set up context-aware dictation?" || return 0
+
+  if ! jq -e 'any(.[]; .installed)' <<<"$agents" >/dev/null; then
+    step "Context-aware dictation runs on an AI agent such as $(jq -r '[.[] | select(.error | not) | .name] | join(", ")' <<<"$agents"), and none of them is installed. Install and sign in to one, then run this setup again."
+    return 0
+  fi
+  step "Your dictation is processed by an AI agent you already use. It has to be signed in."
+  tool=$(jq -r '.[] | select(.installed) | "\(.name)\(if .images then "" else " (no screenshots)" end)\t\(.id)"' <<<"$agents" |
+    gum choose --label-delimiter=$'\t' --header "Which agent should process your dictation?") || return 0
+  name=$(jq -r --arg id "$tool" '.[] | select(.id == $id) | .name' <<<"$agents")
+  # The program as found now, so dictation runs it even where PATH differs.
+  path=$(jq -r --arg id "$tool" '.[] | select(.id == $id) | .path' <<<"$agents")
+  echo
+
+  if ! models=$(ostt agent models "$tool" 2>&1); then
+    say "Could not list $name's models: $(ostt_error "$models")"
+    models=""
+  fi
+  local header="Which $name model? A faster model pastes your text sooner."
+  if [[ ! $models ]]; then
+    model=$(gum input --header "$header Enter its name as you would give it to $name." --placeholder "Model name") || return 0
+  elif (( $(wc -l <<<"$models") <= 10 )); then
+    model=$(gum choose --header "$header" <<<"$models") || return 0
+  else
+    model=$(gum filter --header "$header Type to filter." <<<"$models") || return 0
+  fi
+  if [[ ! $model =~ ^[A-Za-z0-9._:/@-]+$ ]]; then
+    say "That is not a valid model name, so context-aware dictation was not set up."
+    return 0
+  fi
+
+  # ostt-dictate takes the screenshot with grim.
+  if ! omarchy-pkg-add grim; then
+    step "Could not install grim, so context-aware dictation was not set up."
+    return 0
+  fi
+
+  # Append to a copy and let OSTT load it before replacing the real file, so
+  # a config this cannot extend is left untouched. Every step is checked:
+  # this function runs in a condition, where set -e does not apply.
+  if ! candidate=$(mktemp -d); then
+    step "Could not create a temporary folder, so context-aware dictation was not set up."
+    return 0
+  fi
+  if ! { mkdir "$candidate/ostt" && cp "$ostt_config" "$candidate/ostt/ostt.toml" &&
+    (for id in "${missing[@]}"; do fill_action "$id" "$tool" "$model" "$path" || exit 1; done) \
+      >>"$candidate/ostt/ostt.toml"; }; then
+    rm -rf "$candidate"
+    step "Could not read $shown_config, so it was left unchanged."
+    return 0
+  fi
+  for id in "${missing[@]}"; do
+    if ! XDG_CONFIG_HOME=$candidate has_action "$id"; then
+      rm -rf "$candidate"
+      step "Could not add the processing actions to $shown_config, so it was left unchanged. If it still uses [[process.actions]], move those actions to [process.actions.<id>] tables and run this setup again."
+      return 0
+    fi
+  done
+  # Replace the file the config resolves to in one rename, so it is never half
+  # written and a symlinked config (dotfiles) stays a symlink.
+  target=$(realpath "$ostt_config")
+  if ! { cp "$candidate/ostt/ostt.toml" "$target.new" &&
+    chmod --reference="$target" "$target.new" &&
+    mv "$target.new" "$target"; }; then
+    rm -f "$target.new"
+    rm -rf "$candidate"
+    step "Could not write ${target/#$HOME/\~}, so it was left unchanged."
+    return 0
+  fi
+  rm -rf "$candidate"
+
+  write_plugin_config
+  added=$(ostt process list --format json | jq -r --args \
+    '[.[] | select(.id as $id | $ARGS.positional | index($id)) | .name] | join(" and ")' "${missing[@]}")
+  local them=them
+  (( ${#missing[@]} == 1 )) && them=it
+  step "Added $added to $shown_config. To choose the apps that use $them, right-click the microphone in the bar."
+  for id in "${existing[@]}"; do
+    say "The setup uses the '$id' action you already had, as it is."
+  done
+}
+
 if omarchy-cmd-missing ostt; then
-  if confirm "Install OSTT from the AUR?"; then
+  if confirm "OSTT is not installed. Install it from the AUR?"; then
     omarchy-pkg-aur-add ostt
   else
     exit 0
   fi
 fi
 
-# ostt-dictate records with ffmpeg; OSTT pastes on Wayland with wtype.
-omarchy-pkg-add ffmpeg wtype
+# ostt-dictate records with ffmpeg and reads its settings with Python; OSTT
+# pastes on Wayland with wtype.
+omarchy-pkg-add ffmpeg python wtype
 
 if ! ostt model current >/dev/null 2>&1; then
-  echo "Choose the model OSTT transcribes with."
-  echo "Local models run offline; cloud models need an API key (ostt auth login)."
+  step "Choose the model OSTT transcribes your speech with. Local models run offline on this computer; cloud models need an API key, which you can add with 'ostt auth login'."
   echo
   ostt model || true
 fi
 if ! model=$(ostt model current 2>/dev/null); then
-  echo "No transcription model is selected, so dictation was not switched to OSTT."
-  echo "Run 'ostt model', then select OSTT again in Setup > Defaults > Dictation."
+  step "No transcription model is selected, so dictation was not switched to OSTT. Run 'ostt model', then select OSTT again in Setup > Defaults > Dictation."
   exit 1
 fi
 
@@ -36,12 +204,15 @@ fi
 case $model in
   whisper/* | parakeet/*)
     if ! ostt daemon status 2>/dev/null | grep -q "Service: installed"; then
+      echo
       if confirm "Keep $model loaded in the background so dictation starts instantly?"; then
         ostt daemon install
       fi
     fi
     ;;
 esac
+
+setup_context || step "Context-aware dictation was not set up."
 
 omarchy-dictation-use ostt
 hyprctl reload >/dev/null
