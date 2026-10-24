@@ -171,10 +171,15 @@ transcribe() {
   if output=$(ostt transcribe "$audio" "${args[@]}" 2>&1 >/dev/null); then
     rm -f "$audio" "$context"
   else
-    # ostt prints its own explanation last; keep the files for a retry.
-    output=$(printf '%s\n' "$output" | grep -v '^\s*$' | tail -n1)
-    printf '%s\n' "${output:-Transcription failed.}" >"$error_file"
-    notify "Dictation failed" "${output:-Transcription failed.} Retry with: ostt transcribe $audio ${args[*]}"
+    # ostt ends with "Error: <message>", which can span lines (a tool's own
+    # stderr follows the action's error), after any warnings. Show all of it,
+    # or the last line if ostt died without one; keep the files for a retry.
+    output=$(printf '%s\n' "$output" | sed -n '/^[Ee]rror: /,$p' | sed '1s/^[Ee]rror: //' | grep -v '^[[:space:]]*$' ||
+      printf '%s\n' "$output" | grep -v '^[[:space:]]*$' | tail -n1)
+    output=${output:-Transcription failed.}
+    (( ${#output} > 400 )) && output="${output:0:400}…"
+    printf '%s\n' "$output" >"$error_file"
+    notify "Dictation failed" "$output"$'\n'"Retry with: ostt transcribe $audio ${args[*]}"
   fi
   rm -f "$worker_pid" "$action_file"
 }
