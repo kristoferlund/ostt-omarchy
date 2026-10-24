@@ -202,31 +202,59 @@ Panel {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        spacing: Style.space(4)
+        spacing: Style.space(12)
 
-        PanelSectionHeader {
-          text: "DICTATION PER APP"
+        PanelHero {
+          width: parent.width
+          title: "OSTT Dictation"
+          meta: root.phase === "error" ? "Last dictation failed: " + root.errorText : "Ready"
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
+          // The OSTT wordmark, as in the terminal app; text, so it takes the
+          // theme's colour.
+          iconComponent: Component {
+            Text {
+              textFormat: Text.PlainText
+              text: "┏┓┏╋╋\n┗┛┛┗┗"
+              color: root.bar.foreground
+              font.family: "monospace"
+              font.pixelSize: Style.font.title
+            }
+          }
         }
 
-        Text {
+        PanelSeparator {
+          foreground: root.bar.foreground
+        }
+
+        Column {
           width: parent.width
-          bottomPadding: Style.space(6)
-          wrapMode: Text.Wrap
-          textFormat: Text.PlainText
-          text: root.appsError !== "" ? root.appsError
-            : root.apps.length === 0 ? "No apps are open on the visible workspaces."
-            : "Choose what happens to dictation in each app. Other apps get plain transcription."
-          color: root.appsError !== "" ? root.bar.urgent : root.bar.foreground
-          opacity: root.appsError !== "" ? 1 : 0.6
-          font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.bodySmall
-        }
+          spacing: Style.space(4)
 
-        Repeater {
-          model: root.apps
-          delegate: AppRow {}
+          PanelSectionHeader {
+            text: "APPS"
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+          }
+
+          Text {
+            width: parent.width
+            bottomPadding: Style.space(4)
+            wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+            text: root.appsError !== "" ? root.appsError
+              : root.apps.length === 0 ? "No apps are open on the visible workspaces."
+              : "What dictation does in each app. Apps not listed get plain transcription."
+            color: root.appsError !== "" ? root.bar.urgent : root.bar.foreground
+            opacity: root.appsError !== "" ? 1 : 0.6
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Repeater {
+            model: root.apps
+            delegate: AppRow {}
+          }
         }
       }
     }
@@ -460,50 +488,33 @@ Panel {
         }
       }
 
-      // Only an app with an action can send a screenshot.
-      Item {
-        x: Style.space(6)
-        width: parent.width - x
-        implicitHeight: Math.max(shotText.implicitHeight, shotSwitch.implicitHeight)
-        enabled: row.action !== ""
-        opacity: enabled ? 1 : 0.4
+      // A separate setting from the action, so it gets its own section and
+      // a boxed switch row rather than another line in the list.
+      Column {
+        width: parent.width
+        spacing: Style.space(6)
 
-        Column {
-          id: shotText
-          anchors.left: parent.left
-          anchors.right: shotSwitch.left
-          anchors.rightMargin: Style.space(10)
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.space(1)
-
-          Text {
-            width: parent.width
-            textFormat: Text.PlainText
-            text: "Send a screenshot"
-            color: root.bar.foreground
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-          Text {
-            width: parent.width
-            wrapMode: Text.Wrap
-            textFormat: Text.PlainText
-            text: "The action sees the window as it is when dictation starts."
-            color: root.bar.foreground
-            opacity: 0.5
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.caption
-          }
+        PanelSectionHeader {
+          leftPadding: Style.space(6)
+          text: "SCREEN CONTEXT"
+          foreground: root.bar.foreground
+          fontFamily: root.bar.fontFamily
         }
 
-        ToggleSwitch {
-          id: shotSwitch
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
+        // Only an app with an action can send a screenshot.
+        Toggle {
+          width: parent.width
+          enabled: row.action !== ""
+          opacity: enabled ? 1 : 0.4
+          label: "Send a screenshot"
+          description: row.action !== ""
+            ? "The action also sees the window as it is when dictation starts."
+            : "Choose an action first."
           checked: row.screenshot
-          busy: mapProc.running
           foreground: root.bar.foreground
-          onToggled: root.setApp(row.appClass, row.action, !row.screenshot)
+          fontFamily: root.bar.fontFamily
+          titleSize: Style.font.bodySmall
+          onClicked: if (!mapProc.running) root.setApp(row.appClass, row.action, !row.screenshot)
         }
       }
     }
