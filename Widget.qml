@@ -292,7 +292,7 @@ Panel {
         id: names
         anchors.left: appIcon.right
         anchors.leftMargin: Style.space(10)
-        anchors.right: setting.left
+        anchors.right: summary.left
         anchors.rightMargin: Style.space(10)
         anchors.verticalCenter: parent.verticalCenter
         spacing: Style.space(1)
@@ -321,7 +321,7 @@ Panel {
       // Current setting at a glance: the action, with a camera when a
       // screenshot goes along.
       Row {
-        id: setting
+        id: summary
         anchors.right: chevron.left
         anchors.rightMargin: Style.space(8)
         anchors.verticalCenter: parent.verticalCenter
