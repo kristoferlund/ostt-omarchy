@@ -213,7 +213,7 @@ Panel {
           textFormat: Text.PlainText
           text: root.appsError !== "" ? root.appsError
             : root.apps.length === 0 ? "No apps are open on the visible workspaces."
-            : "Choose what happens to dictation in each app. Other apps get plain dictation."
+            : "Choose what happens to dictation in each app. Other apps get plain transcription."
           color: root.appsError !== "" ? root.bar.urgent : root.bar.foreground
           opacity: root.appsError !== "" ? 1 : 0.6
           font.family: root.bar.fontFamily
@@ -343,7 +343,7 @@ Panel {
           width: Math.min(implicitWidth, header.width * 0.5)
           elide: Text.ElideRight
           textFormat: Text.PlainText
-          text: row.action !== "" ? root.actionLabel(row.action) : "Plain dictation"
+          text: row.action !== "" ? root.actionLabel(row.action) : "Plain transcription"
           color: root.bar.foreground
           opacity: row.action !== "" ? 0.9 : 0.5
           font.family: root.bar.fontFamily
@@ -411,7 +411,7 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               elide: Text.ElideRight
               textFormat: Text.PlainText
-              text: option.value === "" ? "None, plain dictation" : String(option.modelData.label)
+              text: option.value === "" ? "Plain transcription" : String(option.modelData.label)
               color: root.bar.foreground
               opacity: option.chosen ? 1 : 0.75
               font.family: root.bar.fontFamily

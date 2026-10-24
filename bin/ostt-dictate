@@ -193,7 +193,7 @@ out = {}
 for app, entry in apps.items():
     if not (isinstance(entry, dict) and isinstance(entry.get("action"), str)
             and isinstance(entry.get("screenshot", False), bool)):
-        sys.exit(f'"{app}" must look like {{ action = "screen-context", screenshot = true }}')
+        sys.exit(f'"{app}" must look like {{ action = "assistant", screenshot = true }}')
     out[app] = {"action": entry["action"], "screenshot": entry.get("screenshot", False)}
 print(json.dumps(out))
 EOF

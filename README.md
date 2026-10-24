@@ -27,7 +27,7 @@ and offers to keep a local model loaded so dictation starts instantly.
 `omarchy plugin update ostt.dictation --yes` updates everything (without `--yes`, Omarchy shows the code changes and asks first). `./uninstall` in the
 same folder switches dictation away from OSTT and removes the scripts; OSTT
 itself stays installed, and so do `~/.config/ostt/dictate.toml` and the
-`screen-context` and `clean` actions in `ostt.toml`.
+`assistant` and `clean` actions in `ostt.toml`.
 
 ## Keys
 
@@ -52,18 +52,25 @@ keyboard focus, so the text still lands in the app you were typing in.
 ## Context-aware dictation
 
 In apps you choose, dictation sends your words to a processing action, and if
-you allow it, a screenshot of the window too. With the screenshot, an AI agent
-(Claude Code, Codex or OpenCode) fixes names and terms to match the screen,
-and carries out spoken instructions such as "finish this sentence as a haiku"
-or "reply saying I can't make it". Every other app keeps plain transcription.
-No screenshot is taken unless you turn it on for that app.
+you allow it, a screenshot of the window too. An AI agent (Claude Code, Codex
+or OpenCode) tidies up your words and carries out spoken instructions such as
+"finish this sentence as a haiku" or "reply saying I can't make it"; with the
+screenshot it also matches names and terms on screen. Every other app keeps
+plain transcription. No screenshot is taken unless you turn it on for that
+app.
 
 The setup offers it and adds two processing actions to
 `~/.config/ostt/ostt.toml`, using the agent and model you pick; edit their
-prompts there. `screen-context` is meant for use with the screenshot on.
-`clean` only fixes misheard words, punctuation and filler, for apps where you
-don't want a screenshot sent. If you already have an action with one of those
-names, the setup leaves it as it is. To choose the apps,
+prompts there:
+
+- **Writing assistant** (`assistant`) tidies up your words and carries out
+  spoken instructions. With the screenshot on, it also matches names, terms
+  and tone on screen.
+- **Text cleanup** (`clean`) only fixes misheard words, punctuation and
+  filler.
+
+If you already have an action with one of those ids, the setup leaves it as
+it is. To choose the apps,
 right-click the bar widget: it lists the apps on the visible workspaces, and
 any already set up, with their current settings. Click a row to expand it and
 choose one of your processing actions, and whether to send a screenshot. The
@@ -73,7 +80,7 @@ also edit by hand (`screenshot` defaults to `false`):
 
 ```toml
 [apps]
-"Slack" = { action = "screen-context", screenshot = true }
+"Slack" = { action = "assistant", screenshot = true }
 "thunderbird" = { action = "my-own-action" }
 ```
 
