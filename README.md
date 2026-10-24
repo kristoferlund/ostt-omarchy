@@ -65,8 +65,9 @@ prompts there. `screen-context` is meant for use with the screenshot on.
 don't want a screenshot sent. If you already have an action with one of those
 names, the setup leaves it as it is. To choose the apps,
 right-click the bar widget: it lists the apps on the visible workspaces, and
-any already set up, each with a dropdown of your processing actions and a
-screenshot switch. The choice applies to every window of that app. It is
+any already set up, with their current settings. The cog on a row opens that
+app's settings: one of your processing actions, and whether to send a
+screenshot. The choice applies to every window of that app. It is
 saved in `~/.config/ostt/dictate.toml` by Hyprland window class, which you can
 also edit by hand (`screenshot` defaults to `false`):
 
@@ -103,7 +104,7 @@ in the notification works.
 
 Left-click starts dictation, or stops it and pastes into the focused app.
 Right-click cancels a recording or a pending transcription; otherwise it opens
-the list of apps with their processing action and screenshot switch.
+the list of apps with their processing action and screenshot setting.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |

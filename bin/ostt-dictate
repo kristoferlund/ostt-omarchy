@@ -12,7 +12,8 @@
 #   ostt-dictate status [--json] [--follow]
 #   ostt-dictate levels   follow the input level while recording
 #   ostt-dictate apps     JSON: processing actions, and the apps on visible
-#                         workspaces or in the config, with their settings
+#                         workspaces or in the config, with their name and
+#                         settings
 #   ostt-dictate map <class> [<action> [--screenshot]]
 #                         set an app's action; no action clears it
 
@@ -210,8 +211,41 @@ print(json.dumps({k: v for k, v in apps.items() if isinstance(v, str)}))
 EOF
 }
 
+# Prints a JSON object of window class -> app name, from the desktop entries
+# whose StartupWMClass or file name matches the class. Earlier data dirs win.
+app_names() {
+  python3 - "$@" <<'EOF'
+import glob, json, os, sys
+classes = {c.lower(): c for c in sys.argv[1:]}
+dirs = [os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")]
+dirs += (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
+names = {}
+for d in dirs:
+    for path in sorted(glob.glob(os.path.join(d, "applications", "*.desktop"))):
+        entry, section = {}, None
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("["):
+                        section = line
+                    elif section == "[Desktop Entry]" and "=" in line:
+                        key, value = line.split("=", 1)
+                        entry.setdefault(key.strip(), value.strip())
+        except OSError:
+            continue
+        if not entry.get("Name") or entry.get("Hidden") == "true":
+            continue
+        stem = os.path.basename(path)[:-len(".desktop")].lower()
+        for key in (entry.get("StartupWMClass", "").lower(), stem, stem.rsplit(".", 1)[-1]):
+            if key in classes:
+                names.setdefault(classes[key], entry["Name"])
+print(json.dumps(names))
+EOF
+}
+
 apps() {
-  local clients workspaces mapped actions error=""
+  local clients workspaces mapped actions classes names error=""
   clients=$(hyprctl clients -j 2>/dev/null) || clients='[]'
   workspaces=$(hyprctl monitors -j 2>/dev/null | jq '[.[].activeWorkspace.id]') || workspaces='[]'
   if ! mapped=$(config_apps 2>&1); then
@@ -219,15 +253,18 @@ apps() {
     mapped='{}'
   fi
   actions=$(ostt process list --format json 2>/dev/null) || actions='[]'
+  mapfile -t classes < <(jq -r '.[].class' <<<"$clients" 2>/dev/null; jq -r 'keys[]' <<<"$mapped")
+  names=$(app_names "${classes[@]}" 2>/dev/null) || names='{}'
   jq -n --argjson clients "$clients" --argjson workspaces "$workspaces" \
-    --argjson mapped "$mapped" --argjson actions "$actions" --arg error "$error" '
+    --argjson mapped "$mapped" --argjson actions "$actions" --argjson names "$names" --arg error "$error" '
     ($clients
       | map(select(.class != "" and (.workspace.id as $id | $workspaces | index($id))))
       | group_by(.class) | map({class: .[0].class, title: .[0].title})) as $visible
     | ($mapped | keys - ($visible | map(.class)) | map({class: ., title: ""})) as $elsewhere
     | {error: $error, actions: $actions,
        apps: (($visible + $elsewhere)
-         | map(. + {action: ($mapped[.class].action // ""), screenshot: ($mapped[.class].screenshot // false)}))}'
+         | map(. + {name: ($names[.class] // .class), action: ($mapped[.class].action // ""),
+                   screenshot: ($mapped[.class].screenshot // false)}))}'
 }
 
 # Sets or clears one app's entry under [apps], keeping the rest of the file
