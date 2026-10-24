@@ -70,35 +70,46 @@ lock() {
 }
 
 # Looks up the focused app in the config. A listed app gets its action, and a
-# screenshot of its window if it asks for one; any other app gets plain
-# dictation. Problems are reported and fall back to plain dictation rather
-# than blocking it.
+# screenshot of its window if it asks for one and the action can use it; any
+# other app gets plain dictation. Problems are reported and fall back rather
+# than block dictation, and every step is time-limited because the hold key's
+# release waits for it.
 pick_action() {
   [[ -f $config ]] || return 0
-  local win class apps action actions
-  win=$(hyprctl activewindow -j 2>/dev/null) || return 0
+  local win class apps reason action actions images
+  win=$(timeout 2 hyprctl activewindow -j 2>/dev/null) || return 0
   class=$(jq -r '.class // empty' <<<"$win" 2>/dev/null)
   [[ $class ]] || return 0
   if ! apps=$(config_apps 2>&1); then
     notify "Dictating without context" "Could not read $config: ${apps##*$'\n'}"
     return 0
   fi
-  action=$(jq -r --arg class "$class" '.[$class].action // empty' <<<"$apps")
+  reason=$(jq -r --arg class "$class" '.invalid[$class] // empty' <<<"$apps")
+  if [[ $reason ]]; then
+    notify "Dictating without context" "The entry for $class in $config is not valid: $reason"
+    return 0
+  fi
+  action=$(jq -r --arg class "$class" '.apps[$class].action // empty' <<<"$apps")
   [[ $action ]] || return 0
-  if ! actions=$(ostt process list --format json 2>&1); then
+  if ! actions=$(timeout 5 ostt process list --format json 2>&1); then
     notify "Dictating without context" "Could not list OSTT's processing actions: ${actions##*$'\n'}"
     return 0
   fi
-  if ! jq -e --arg id "$action" 'any(.[]; .id == $id)' <<<"$actions" >/dev/null; then
+  # Empty when there is no such action; an OSTT too old to say takes images.
+  images=$(jq -r --arg id "$action" 'first(.[] | select(.id == $id) | if .images == null then true else .images end)' <<<"$actions" 2>/dev/null)
+  if [[ ! $images ]]; then
     notify "Dictating without context" "$class is set to '$action', which is not a processing action in ostt.toml."
     return 0
   fi
-  # JPEG at 60% keeps small text legible at a fraction of the PNG size.
-  if jq -e --arg class "$class" '.[$class].screenshot' <<<"$apps" >/dev/null &&
-    ! grim -t jpeg -q 60 -g "$(jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' <<<"$win")" "$context" 2>/dev/null; then
-    rm -f "$context"
-    notify "Dictating without context" "Could not take a screenshot of $class."
-    return 0
+  if jq -e --arg class "$class" '.apps[$class].screenshot' <<<"$apps" >/dev/null; then
+    if [[ $images != true ]]; then
+      notify "Dictating without a screenshot" "'$action' runs on an agent that takes no images."
+    elif ! timeout 5 grim -t jpeg -q 60 -g "$(jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' <<<"$win")" "$context" 2>/dev/null; then
+      # JPEG at 60% keeps small text legible at a fraction of the PNG size.
+      rm -f "$context"
+      notify "Dictating without context" "Could not take a screenshot of $class."
+      return 0
+    fi
   fi
   printf '%s\n' "$action" >"$action_file"
 }
@@ -184,35 +195,25 @@ transcribe() {
   rm -f "$worker_pid" "$action_file"
 }
 
-# Reads [apps] from the config as a JSON object of
-# class -> { action, screenshot }. Any malformed entry fails the whole file.
+# Reads [apps] from the config as JSON: {"apps": {class: {action, screenshot}},
+# "invalid": {class: reason}}. A malformed entry only affects its own app; a
+# file that is not valid TOML fails as a whole.
 config_apps() {
-  [[ -f $config ]] || { echo '{}'; return 0; }
-  python3 - "$config" <<'EOF'
+  [[ -f $config ]] || { echo '{"apps": {}, "invalid": {}}'; return 0; }
+  timeout 3 python3 - "$config" <<'EOF'
 import json, sys, tomllib
 with open(sys.argv[1], "rb") as f:
     apps = tomllib.load(f).get("apps", {})
 if not isinstance(apps, dict):
     sys.exit("[apps] must be a table")
-out = {}
+valid, invalid = {}, {}
 for app, entry in apps.items():
-    if not (isinstance(entry, dict) and isinstance(entry.get("action"), str)
+    if (isinstance(entry, dict) and isinstance(entry.get("action"), str)
             and isinstance(entry.get("screenshot", False), bool)):
-        sys.exit(f'"{app}" must look like {{ action = "assistant", screenshot = true }}')
-    out[app] = {"action": entry["action"], "screenshot": entry.get("screenshot", False)}
-print(json.dumps(out))
-EOF
-}
-
-apps() {
-  [[ -f $config ]] || { echo '{}'; return 0; }
-  python3 - "$config" <<'EOF'
-import json, sys, tomllib
-with open(sys.argv[1], "rb") as f:
-    apps = tomllib.load(f).get("apps", {})
-if not isinstance(apps, dict):
-    sys.exit("[apps] must be a table")
-print(json.dumps({k: v for k, v in apps.items() if isinstance(v, str)}))
+        valid[app] = {"action": entry["action"], "screenshot": entry.get("screenshot", False)}
+    else:
+        invalid[app] = 'it must look like { action = "assistant", screenshot = true }'
+print(json.dumps({"apps": valid, "invalid": invalid}))
 EOF
 }
 
@@ -251,10 +252,14 @@ EOF
 }
 
 apps() {
-  local clients workspaces mapped actions classes names error=""
+  local clients workspaces mapped invalid actions classes names error=""
   clients=$(hyprctl clients -j 2>/dev/null) || clients='[]'
   workspaces=$(hyprctl monitors -j 2>/dev/null | jq '[.[].activeWorkspace.id]') || workspaces='[]'
-  if ! mapped=$(config_apps 2>&1); then
+  if mapped=$(config_apps 2>&1); then
+    invalid=$(jq -r '.invalid | keys | join(", ")' <<<"$mapped")
+    [[ $invalid ]] && error="Not valid in $config, so dictated without context: $invalid"
+    mapped=$(jq '.apps' <<<"$mapped")
+  else
     error="Could not read $config: ${mapped##*$'\n'}"
     mapped='{}'
   fi
@@ -265,8 +270,8 @@ apps() {
     --argjson mapped "$mapped" --argjson actions "$actions" --argjson names "$names" --arg error "$error" '
     ($clients
       | map(select(.class != "" and (.workspace.id as $id | $workspaces | index($id))))
-      | group_by(.class) | map({class: .[0].class, title: .[0].title})) as $visible
-    | ($mapped | keys - ($visible | map(.class)) | map({class: ., title: ""})) as $elsewhere
+      | map(.class) | unique | map({class: .})) as $visible
+    | ($mapped | keys - ($visible | map(.class)) | map({class: .})) as $elsewhere
     | {error: $error, actions: $actions,
        apps: (($visible + $elsewhere)
          | map(. + {name: ($names[.class].name // (.class | capture("^chrome-(?<host>[^_]+)__").host) // .class),
@@ -276,9 +281,10 @@ apps() {
 }
 
 # Sets or clears one app's entry under [apps], keeping the rest of the file
-# as written, and replaces the file only once the result parses.
+# as written. The file is replaced only if the result parses to the original
+# document with just that entry changed.
 map_app() {
-  if [[ ! ${1:-} ]] || (( $# > 3 )) || [[ $# == 3 && $3 != --screenshot ]]; then
+  if [[ ! ${1:-} || ${2:-} == -* ]] || (( $# > 3 )) || [[ $# == 3 && $3 != --screenshot ]]; then
     echo "Usage: ostt-dictate map <class> [<action> [--screenshot]]" >&2
     exit 1
   fi
@@ -288,19 +294,29 @@ import json, os, re, sys, tempfile, tomllib
 path, app, action, screenshot = sys.argv[1:5]
 entry = {"action": action, "screenshot": bool(screenshot)} if action else None
 try:
-    with open(path) as f:
-        lines = f.read().splitlines()
+    with open(path, newline="") as f:
+        original = f.read()
 except FileNotFoundError:
-    lines = []
+    original = ""
+try:
+    before = tomllib.loads(original)
+except tomllib.TOMLDecodeError as e:
+    sys.exit(f"{path} is not valid TOML: {e}")
+if not isinstance(before.get("apps", {}), dict):
+    sys.exit(f"[apps] in {path} must be a table")
+newline = "\r\n" if "\r\n" in original else "\n"
+lines = original.splitlines()
 
-key = re.compile(r'^\s*(?:"((?:[^"\\]|\\.)*)"|([A-Za-z0-9_-]+))\s*=')
 def key_of(line):
-    m = key.match(line)
-    if not m:
+    """The key a one-line `key = value` defines, or None."""
+    try:
+        parsed = tomllib.loads(line)
+    except tomllib.TOMLDecodeError:
         return None
-    return json.loads(f'"{m.group(1)}"') if m.group(1) is not None else m.group(2)
+    return next(iter(parsed)) if len(parsed) == 1 else None
 
-start = next((i for i, l in enumerate(lines) if l.strip() == "[apps]"), None)
+header = re.compile(r"\s*\[\s*apps\s*\]\s*(#.*)?")
+start = next((i for i, l in enumerate(lines) if header.fullmatch(l)), None)
 if start is None:
     if lines and lines[-1].strip():
         lines.append("")
@@ -313,18 +329,23 @@ if action:
     value = json.dumps(action, ensure_ascii=False)
     flag = "true" if screenshot else "false"
     section.insert(last_key + 1, f"{json.dumps(app, ensure_ascii=False)} = {{ action = {value}, screenshot = {flag} }}")
-text = "\n".join(lines[:start + 1] + section + lines[end:]) + "\n"
+text = newline.join(lines[:start + 1] + section + lines[end:]) + newline
 
+expected = dict(before)
+expected["apps"] = dict(before.get("apps", {}))
+if entry:
+    expected["apps"][app] = entry
+else:
+    expected["apps"].pop(app, None)
 try:
-    tomllib.loads("\n".join(lines))
-    updated = tomllib.loads(text).get("apps", {}).get(app)
-except tomllib.TOMLDecodeError as e:
-    sys.exit(f"{path} is not valid TOML: {e}")
-if updated != entry:
-    sys.exit(f"Could not update {path}")
+    after = tomllib.loads(text)
+except tomllib.TOMLDecodeError:
+    after = None
+if after != expected:
+    sys.exit(f"Could not change {app} in {path} safely; edit [apps] by hand.")
 target = os.path.realpath(path)
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".dictate.")
-with os.fdopen(fd, "w") as f:
+with os.fdopen(fd, "w", newline="") as f:
     f.write(text)
 if os.path.exists(target):
     os.chmod(tmp, os.stat(target).st_mode & 0o777)

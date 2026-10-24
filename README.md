@@ -73,7 +73,8 @@ If you already have an action with one of those ids, the setup leaves it as
 it is. To choose the apps,
 right-click the bar widget: it lists the apps on the visible workspaces, and
 any already set up, with their current settings. Click a row to expand it and
-choose one of your processing actions, and whether to send a screenshot. The
+choose one of your processing actions, and whether to send a screenshot (the
+card is mouse-only for now). The
 choice applies to every window of that app. It is
 saved in `~/.config/ostt/dictate.toml` by Hyprland window class, which you can
 also edit by hand (`screenshot` defaults to `false`):
@@ -88,8 +89,9 @@ The setup offers the agents OSTT knows how to run with their tools switched
 off, so text on screen can't make them run commands or touch files: Claude
 Code, Codex, OpenCode, Gemini CLI, Pi, Oh My Pi, GitHub Copilot, Grok, Cursor,
 OpenClaw and Hermes (`ostt agent list` shows which are installed). Grok,
-Cursor, OpenClaw and Hermes take no screenshots, so dictation in an app with
-the screenshot on fails with them. A bash action gets the screenshot's
+Cursor, OpenClaw and Hermes take no screenshots: the card offers the
+screenshot only for actions that can use it, and an app set by hand to send
+one to such an action is dictated without it, with a notification. A bash action gets the screenshot's
 path in `$OSTT_ATTACHMENT`. If something is wrong
 with an app's entry, or the screenshot fails, that dictation falls back to
 plain transcription and a notification says why.

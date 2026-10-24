@@ -29,11 +29,17 @@ Panel {
 
   readonly property bool busy: phase === "recording" || phase === "transcribing"
 
-  // From `ostt-dictate apps`: [{ class, name, icon, title, action,
-  // screenshot }] and [{ id, name, description }].
+  // From `ostt-dictate apps`: [{ class, name, icon, action, screenshot }] and
+  // [{ id, name, description, images }].
   property var apps: []
   property var actionOptions: []
   property string appsError: ""
+  // A change that could not be saved; kept until the next one succeeds, as
+  // reloading the list afterwards would otherwise hide it.
+  property string mapError: ""
+  // Clicks wait while a change or the reload after it runs, so they never act
+  // on the list as it was before.
+  readonly property bool changing: mapProc.running || appsProc.running
   // The class of the one expanded row; kept across reloads after a change.
   property string expandedClass: ""
 
@@ -71,13 +77,15 @@ Panel {
       root.appsError = "Could not list apps."
       return
     }
-    var options = [{ value: "", label: "Plain transcription", description: "No processing, your words as heard" }]
+    var options = [{ value: "", label: "Plain transcription", description: "No processing, your words as heard", images: false }]
     var actions = data.actions || []
     for (var i = 0; i < actions.length; i++)
       options.push({
         value: String(actions[i].id),
         label: String(actions[i].name || actions[i].id),
-        description: String(actions[i].description || "")
+        description: String(actions[i].description || ""),
+        // An OSTT too old to say is assumed to take images.
+        images: actions[i].images !== false
       })
     root.actionOptions = options
     root.apps = data.apps || []
@@ -90,6 +98,12 @@ Panel {
     if (action !== "" && screenshot) command.push("--screenshot")
     mapProc.command = command
     mapProc.running = true
+  }
+
+  function actionTakesImages(action) {
+    for (var i = 0; i < root.actionOptions.length; i++)
+      if (root.actionOptions[i].value === action) return root.actionOptions[i].images
+    return false
   }
 
   function actionLabel(action) {
@@ -105,7 +119,10 @@ Panel {
   }
 
   onOpenedChanged: {
-    if (opened) appsProc.running = true
+    if (opened) {
+      root.mapError = ""
+      appsProc.running = true
+    }
     else root.expandedClass = ""
   }
 
@@ -133,7 +150,7 @@ Panel {
     id: mapProc
     stderr: StdioCollector { id: mapErr; waitForEnd: true }
     onExited: function(exitCode) {
-      if (exitCode !== 0) root.appsError = String(mapErr.text || "Could not save the change.").trim()
+      root.mapError = exitCode === 0 ? "" : String(mapErr.text || "Could not save the change.").trim()
       appsProc.running = true
     }
   }
@@ -197,11 +214,18 @@ Panel {
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
+      // The card is at most as tall as the screen; a longer list scrolls.
+      Flickable {
+        id: scroller
+        anchors.fill: parent
+        contentHeight: column.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        interactive: contentHeight > height
+
       Column {
         id: column
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
+        width: scroller.width
         spacing: Style.space(12)
 
         PanelHero {
@@ -242,11 +266,12 @@ Panel {
             bottomPadding: Style.space(4)
             wrapMode: Text.Wrap
             textFormat: Text.PlainText
-            text: root.appsError !== "" ? root.appsError
+            readonly property string error: root.mapError !== "" ? root.mapError : root.appsError
+            text: error !== "" ? error
               : root.apps.length === 0 ? "No apps are open on the visible workspaces."
               : "What dictation does in each app. Apps not listed get plain transcription."
-            color: root.appsError !== "" ? root.bar.urgent : root.bar.foreground
-            opacity: root.appsError !== "" ? 1 : 0.6
+            color: error !== "" ? root.bar.urgent : root.bar.foreground
+            opacity: error !== "" ? 1 : 0.6
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
@@ -256,6 +281,7 @@ Panel {
             delegate: AppRow {}
           }
         }
+      }
       }
     }
   }
@@ -482,7 +508,7 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: if (!mapProc.running && !option.chosen) root.setApp(row.appClass, option.value, row.screenshot)
+              onClicked: if (!root.changing && !option.chosen) root.setApp(row.appClass, option.value, row.screenshot)
             }
           }
         }
@@ -501,20 +527,22 @@ Panel {
           fontFamily: root.bar.fontFamily
         }
 
-        // Only an app with an action can send a screenshot.
+        // Only an action that takes images can get a screenshot; one already
+        // on can still be turned off.
         Toggle {
+          readonly property bool takesImages: root.actionTakesImages(row.action)
           width: parent.width
-          enabled: row.action !== ""
+          enabled: takesImages || row.screenshot
           opacity: enabled ? 1 : 0.4
           label: "Send a screenshot"
-          description: row.action !== ""
-            ? "The action also sees the window as it is when dictation starts."
-            : "Choose an action first."
+          description: row.action === "" ? "Choose an action first."
+            : !takesImages ? "This action's agent takes no images."
+            : "The action also sees the window as it is when dictation starts."
           checked: row.screenshot
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
           titleSize: Style.font.bodySmall
-          onClicked: if (!mapProc.running) root.setApp(row.appClass, row.action, !row.screenshot)
+          onClicked: if (enabled && !root.changing) root.setApp(row.appClass, row.action, !row.screenshot)
         }
       }
     }

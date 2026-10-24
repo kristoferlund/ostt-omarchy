@@ -62,11 +62,18 @@ setup_context() {
     return 0
   fi
   # Agents come from OSTT, which knows how to run each one with its tools off.
-  if ! agents=$(ostt agent list --format json 2>/dev/null); then
+  if ! ostt agent --help >/dev/null 2>&1; then
     step "Context-aware dictation needs a newer OSTT, so it was skipped. Update OSTT and run this setup again to add it."
     return 0
   fi
-  [[ -f $ostt_config ]] || return 0
+  if ! agents=$(ostt agent list --format json 2>&1); then
+    step "Context-aware dictation was not set up: OSTT could not list its agents (${agents##*$'\n'})."
+    return 0
+  fi
+  if [[ ! -f $ostt_config ]]; then
+    step "Context-aware dictation was skipped: $shown_config does not exist yet. Run this setup again once OSTT has created it."
+    return 0
+  fi
 
   step "Context-aware dictation lets you choose what happens to your words in each app. An AI agent can tidy them up (Text cleanup), or also carry out spoken instructions such as \"reply saying I can't make it\" (Writing assistant). You can let it see a screenshot of the app's window too, so it gets names and terms on screen right. Every other app keeps plain transcription."
   echo
@@ -114,13 +121,16 @@ setup_context() {
 
   # Append to a copy and let OSTT load it before replacing the real file, so
   # a config this cannot extend is left untouched.
-  candidate=$(mktemp -d) || return 0
-  mkdir "$candidate/ostt"
-  cp "$ostt_config" "$candidate/ostt/ostt.toml"
+  # Every step is checked: this function runs in a condition, where set -e
+  # does not apply.
+  if ! candidate=$(mktemp -d); then
+    step "Could not create a temporary folder, so context-aware dictation was not set up."
+    return 0
+  fi
   for id in "${missing[@]}"; do
     case $id in
       assistant)
-        cat >>"$candidate/ostt/ostt.toml" <<EOF
+        cat >>"$candidate/additions" <<EOF
 
 [process.actions.assistant]
 name = "Writing assistant"
@@ -146,7 +156,7 @@ Reply with only the text to paste, no quotes or explanations.''' },
 EOF
         ;;
       clean)
-        cat >>"$candidate/ostt/ostt.toml" <<EOF
+        cat >>"$candidate/additions" <<EOF
 
 [process.actions.clean]
 name = "Text cleanup"
@@ -166,6 +176,12 @@ EOF
         ;;
     esac
   done
+  if ! { mkdir "$candidate/ostt" &&
+    cat "$ostt_config" "$candidate/additions" >"$candidate/ostt/ostt.toml"; }; then
+    rm -rf "$candidate"
+    step "Could not read $shown_config, so it was left unchanged."
+    return 0
+  fi
   if ! XDG_CONFIG_HOME=$candidate has_action assistant ||
     ! XDG_CONFIG_HOME=$candidate has_action clean; then
     step "Could not add the processing actions to $shown_config, so it was left unchanged. If it still uses [[process.actions]], move those actions to [process.actions.<id>] tables and run this setup again."
@@ -174,8 +190,11 @@ EOF
   fi
   # Replace the file the config resolves to in one rename, so it is never half
   # written and a symlinked config (dotfiles) stays a symlink.
+  # The new file must be the current one plus the new actions, byte for byte,
+  # so a config that changed or could not be read whole is never replaced.
   target=$(realpath "$ostt_config")
-  if ! { cp "$candidate/ostt/ostt.toml" "$target.new" &&
+  if ! cat "$target" "$candidate/additions" | cmp -s - "$candidate/ostt/ostt.toml" ||
+    ! { cp "$candidate/ostt/ostt.toml" "$target.new" &&
     chmod --reference="$target" "$target.new" &&
     mv "$target.new" "$target"; }; then
     rm -f "$target.new"
