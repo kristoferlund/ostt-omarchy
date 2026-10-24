@@ -213,7 +213,7 @@ EOF
 
 # Prints a JSON object of window class -> { name, icon }, from the desktop
 # entries whose StartupWMClass or file name matches the class. Earlier data
-# dirs win.
+# dirs win. `apps` names a Chrome web app without an entry by its host.
 app_names() {
   python3 - "$@" <<'EOF'
 import glob, json, os, sys
@@ -264,7 +264,8 @@ apps() {
     | ($mapped | keys - ($visible | map(.class)) | map({class: ., title: ""})) as $elsewhere
     | {error: $error, actions: $actions,
        apps: (($visible + $elsewhere)
-         | map(. + {name: ($names[.class].name // .class), icon: ($names[.class].icon // ""),
+         | map(. + {name: ($names[.class].name // (.class | capture("^chrome-(?<host>[^_]+)__").host) // .class),
+                   icon: ($names[.class].icon // ""),
                    action: ($mapped[.class].action // ""),
                    screenshot: ($mapped[.class].screenshot // false)}))}'
 }

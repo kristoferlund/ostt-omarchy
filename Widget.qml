@@ -244,6 +244,7 @@ Panel {
     hasCursor: headerMouse.containsMouse && !expanded
     current: expanded
     foreground: root.bar.foreground
+    currentFill: Style.normalFillFor(root.bar.foreground, Commons.Color.accent)
     clip: true
 
     MouseArea {
@@ -308,6 +309,7 @@ Panel {
         }
         Text {
           width: parent.width
+          visible: row.appName !== row.appClass
           elide: Text.ElideRight
           textFormat: Text.PlainText
           text: row.appClass
@@ -338,7 +340,7 @@ Panel {
         }
         Text {
           anchors.verticalCenter: parent.verticalCenter
-          width: Math.min(implicitWidth, header.width * 0.4)
+          width: Math.min(implicitWidth, header.width * 0.5)
           elide: Text.ElideRight
           textFormat: Text.PlainText
           text: row.action !== "" ? root.actionLabel(row.action) : "Plain dictation"
@@ -368,42 +370,80 @@ Panel {
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.top: header.bottom
-      anchors.leftMargin: Style.space(10)
+      // Lined up with the app name, past the icon.
+      anchors.leftMargin: Style.space(10) + appIcon.width + Style.space(4)
       anchors.rightMargin: Style.space(10)
       topPadding: Style.space(2)
       bottomPadding: Style.space(12)
       spacing: Style.space(10)
 
-      PanelSectionHeader {
-        text: "ACTION"
-        foreground: root.bar.foreground
-        fontFamily: root.bar.fontFamily
-      }
-
-      Flow {
+      Column {
         width: parent.width
-        spacing: Style.space(6)
+        spacing: Style.space(4)
+
+        PanelSectionHeader {
+          leftPadding: Style.space(6)
+          text: "ACTION"
+          foreground: root.bar.foreground
+          fontFamily: root.bar.fontFamily
+        }
 
         Repeater {
           model: root.actionOptions
-          Button {
+
+          // One choice; the current one carries a check mark.
+          CursorSurface {
+            id: option
             required property var modelData
-            text: String(modelData.label)
-            tooltipText: modelData.value === "" ? "Plain dictation, no processing" : String(modelData.value)
-            fontSize: Style.font.bodySmall
+            readonly property string value: String(modelData.value)
+            readonly property bool chosen: value === row.action
+            width: parent.width
+            implicitHeight: optionLabel.implicitHeight + Style.space(12)
+            hasCursor: optionMouse.containsMouse
             foreground: root.bar.foreground
-            fontFamily: root.bar.fontFamily
-            verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
-            bordered: true
-            active: String(modelData.value) === row.action
-            onClicked: if (!mapProc.running && !active) root.setApp(row.appClass, String(modelData.value), row.screenshot)
+
+            Text {
+              id: optionLabel
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(6)
+              anchors.right: check.left
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              elide: Text.ElideRight
+              textFormat: Text.PlainText
+              text: option.value === "" ? "None, plain dictation" : String(option.modelData.label)
+              color: root.bar.foreground
+              opacity: option.chosen ? 1 : 0.75
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            Text {
+              id: check
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              visible: option.chosen
+              textFormat: Text.PlainText
+              text: "󰄬"
+              color: Commons.Color.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            MouseArea {
+              id: optionMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: if (!mapProc.running && !option.chosen) root.setApp(row.appClass, option.value, row.screenshot)
+            }
           }
         }
       }
 
       // Only an app with an action can send a screenshot.
       Item {
-        width: parent.width
+        x: Style.space(6)
+        width: parent.width - x
         implicitHeight: Math.max(shotText.implicitHeight, shotSwitch.implicitHeight)
         enabled: row.action !== ""
         opacity: enabled ? 1 : 0.4
