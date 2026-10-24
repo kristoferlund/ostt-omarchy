@@ -9,9 +9,26 @@ confirm() {
   gum confirm --affirmative "$(omarchy-i18n common.yes)" --negative "$(omarchy-i18n common.no)" "$1"
 }
 
+# Prints a paragraph wrapped at word boundaries to the terminal, at most 80
+# columns wide.
+say() {
+  local cols
+  cols=$(tput cols 2>/dev/null) || cols=80
+  (( cols > 80 )) && cols=80
+  fold -s -w "$cols" <<<"$1"
+}
+
+# Starts a step of the setup: a blank line, then its explanation.
+step() {
+  echo
+  say "$1"
+}
+
 config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 ostt_config="$config_home/ostt/ostt.toml"
 plugin_config="$config_home/ostt/dictate.toml"
+# How messages name the config, e.g. ~/.config/ostt/ostt.toml.
+shown_config=${ostt_config/#$HOME/\~}
 
 has_action() {
   ostt process list --format json 2>/dev/null | jq -e --arg id "$1" 'any(.[]; .id == $id)' >/dev/null
@@ -45,54 +62,52 @@ setup_context() {
     return 0
   fi
   if ! ostt transcribe --help 2>/dev/null | grep -q -- --attach; then
-    echo "Context-aware dictation needs a newer OSTT (ostt transcribe --attach); skipped."
+    step "Context-aware dictation needs a newer OSTT, so it was skipped. Update OSTT and run this setup again to add it."
     return 0
   fi
   [[ -f $ostt_config ]] || return 0
 
+  step "Context-aware dictation lets you choose what happens to your words in each app. An AI agent can tidy them up (Text cleanup), or also carry out spoken instructions such as \"reply saying I can't make it\" (Writing assistant). You can let it see a screenshot of the app's window too, so it gets names and terms on screen right. Every other app keeps plain transcription."
   echo
-  echo "Context-aware dictation: in apps you choose, OSTT sends your words to an"
-  echo "AI agent. Writing assistant tidies them up and carries out spoken"
-  echo "instructions such as \"reply saying I can't make it\"; with a screenshot"
-  echo "of the window it also matches names and terms on screen. Text cleanup"
-  echo "only tidies up your words. Other apps keep plain transcription."
-  confirm "Set up context-aware dictation (adds: ${missing[*]})?" || return 0
+  confirm "Set up context-aware dictation?" || return 0
 
   omarchy-cmd-missing claude || tools+=("Claude Code")
   omarchy-cmd-missing codex || tools+=("Codex")
   omarchy-cmd-missing opencode || tools+=("OpenCode")
   if (( ${#tools[@]} == 0 )); then
-    echo "Context-aware dictation needs Claude Code, Codex or OpenCode. Install one and run this setup again."
+    step "Context-aware dictation runs on Claude Code, Codex or OpenCode, and none of them is installed. Install and sign in to one, then run this setup again."
     return 0
   fi
 
-  tool=$(gum choose --header "Which AI agent?" "${tools[@]}") || return 0
+  step "Your dictation is processed by an AI agent you already use. It has to be signed in."
+  tool=$(gum choose --header "Which agent should process your dictation?" "${tools[@]}") || return 0
+  echo
   case $tool in
     "Claude Code")
       tool=claude-code
-      model=$(gum choose --header "Which model? Faster models paste sooner." haiku sonnet opus) || return 0
+      model=$(gum choose --header "Which Claude model? Haiku is fastest, so your text is pasted sooner." haiku sonnet opus) || return 0
       ;;
     Codex)
       tool=codex-cli
-      model=$(gum input --header "Which Codex model? (as passed to codex --model)") || return 0
+      model=$(gum input --header "Which Codex model? Enter the name you would pass to codex --model." --placeholder "Model name") || return 0
       ;;
     OpenCode)
       tool=opencode
       if ! models=$(opencode models 2>/dev/null) || [[ ! $models ]]; then
-        echo "Could not list OpenCode models; context-aware dictation was not set up."
+        say "Could not list OpenCode's models, so context-aware dictation was not set up. Check that 'opencode models' works, then run this setup again."
         return 0
       fi
-      model=$(gum filter --header "Which model?" <<<"$models") || return 0
+      model=$(gum filter --header "Which model? Type to filter. A fast model pastes your text sooner." <<<"$models") || return 0
       ;;
   esac
   if [[ ! $model =~ ^[A-Za-z0-9._:/@-]+$ ]]; then
-    echo "No valid model name given; context-aware dictation was not set up."
+    say "That is not a valid model name, so context-aware dictation was not set up."
     return 0
   fi
 
   # ostt-dictate takes the screenshot with grim and reads dictate.toml with Python.
   if ! omarchy-pkg-add grim python; then
-    echo "Could not install grim and python; context-aware dictation was not set up."
+    step "Could not install grim and python, so context-aware dictation was not set up."
     return 0
   fi
 
@@ -152,8 +167,7 @@ EOF
   done
   if ! XDG_CONFIG_HOME=$candidate has_action assistant ||
     ! XDG_CONFIG_HOME=$candidate has_action clean; then
-    echo "Could not add the ${missing[*]} actions to $ostt_config; it was left unchanged."
-    echo "If it still uses [[process.actions]], move those actions to [process.actions.<id>] tables and run this setup again."
+    step "Could not add the processing actions to $shown_config, so it was left unchanged. If it still uses [[process.actions]], move those actions to [process.actions.<id>] tables and run this setup again."
     rm -rf "$candidate"
     return 0
   fi
@@ -165,17 +179,24 @@ EOF
     mv "$target.new" "$target"; }; then
     rm -f "$target.new"
     rm -rf "$candidate"
-    echo "Could not write $target; it was left unchanged."
+    step "Could not write ${target/#$HOME/\~}, so it was left unchanged."
     return 0
   fi
   rm -rf "$candidate"
 
   write_plugin_config
-  echo "Added processing actions: ${missing[*]}. Right-click the dictation icon in the bar to choose the apps that use them."
+  local names=()
+  for id in "${missing[@]}"; do
+    case $id in
+      assistant) names+=("Writing assistant") ;;
+      clean) names+=("Text cleanup") ;;
+    esac
+  done
+  step "Added $(IFS=,; echo "${names[*]}" | sed 's/,/ and /') to $shown_config. To choose the apps that use them, right-click the microphone in the bar."
 }
 
 if omarchy-cmd-missing ostt; then
-  if confirm "Install OSTT from the AUR?"; then
+  if confirm "OSTT is not installed. Install it from the AUR?"; then
     omarchy-pkg-aur-add ostt
   else
     exit 0
@@ -186,14 +207,12 @@ fi
 omarchy-pkg-add ffmpeg wtype
 
 if ! ostt model current >/dev/null 2>&1; then
-  echo "Choose the model OSTT transcribes with."
-  echo "Local models run offline; cloud models need an API key (ostt auth login)."
+  step "Choose the model OSTT transcribes your speech with. Local models run offline on this computer; cloud models need an API key, which you can add with 'ostt auth login'."
   echo
   ostt model || true
 fi
 if ! model=$(ostt model current 2>/dev/null); then
-  echo "No transcription model is selected, so dictation was not switched to OSTT."
-  echo "Run 'ostt model', then select OSTT again in Setup > Defaults > Dictation."
+  step "No transcription model is selected, so dictation was not switched to OSTT. Run 'ostt model', then select OSTT again in Setup > Defaults > Dictation."
   exit 1
 fi
 
@@ -201,6 +220,7 @@ fi
 case $model in
   whisper/* | parakeet/*)
     if ! ostt daemon status 2>/dev/null | grep -q "Service: installed"; then
+      echo
       if confirm "Keep $model loaded in the background so dictation starts instantly?"; then
         ostt daemon install
       fi
@@ -208,7 +228,7 @@ case $model in
     ;;
 esac
 
-setup_context || echo "Context-aware dictation was not set up."
+setup_context || step "Context-aware dictation was not set up."
 
 omarchy-dictation-use ostt
 hyprctl reload >/dev/null

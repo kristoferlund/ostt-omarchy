@@ -185,7 +185,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(440))
+    contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
     PanelKeyCatcher {
@@ -206,7 +206,7 @@ Panel {
 
         PanelHero {
           width: parent.width
-          title: "OSTT Dictation"
+          title: "Dictation"
           meta: root.phase === "error" ? "Last dictation failed: " + root.errorText : "Ready"
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
