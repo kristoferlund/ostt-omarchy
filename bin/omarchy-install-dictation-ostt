@@ -108,6 +108,7 @@ setup_context() {
 
 [process.actions.assistant]
 name = "Writing assistant"
+description = "Tidies up your words and carries out spoken instructions"
 type = "ai"
 tool = "$tool"
 model = "$model"
@@ -133,6 +134,7 @@ EOF
 
 [process.actions.clean]
 name = "Text cleanup"
+description = "Fixes misheard words, punctuation and filler"
 type = "ai"
 tool = "$tool"
 model = "$model"

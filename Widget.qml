@@ -30,9 +30,9 @@ Panel {
   readonly property bool busy: phase === "recording" || phase === "transcribing"
 
   // From `ostt-dictate apps`: [{ class, name, icon, title, action,
-  // screenshot }] and [{ id, name }].
+  // screenshot }] and [{ id, name, description }].
   property var apps: []
-  property var actionOptions: [{ value: "", label: "None" }]
+  property var actionOptions: []
   property string appsError: ""
   // The class of the one expanded row; kept across reloads after a change.
   property string expandedClass: ""
@@ -71,10 +71,14 @@ Panel {
       root.appsError = "Could not list apps."
       return
     }
-    var options = [{ value: "", label: "None" }]
+    var options = [{ value: "", label: "Plain transcription", description: "No processing, your words as heard" }]
     var actions = data.actions || []
     for (var i = 0; i < actions.length; i++)
-      options.push({ value: String(actions[i].id), label: String(actions[i].name || actions[i].id) })
+      options.push({
+        value: String(actions[i].id),
+        label: String(actions[i].name || actions[i].id),
+        description: String(actions[i].description || "")
+      })
     root.actionOptions = options
     root.apps = data.apps || []
     root.appsError = String(data.error || "")
@@ -398,24 +402,40 @@ Panel {
             readonly property string value: String(modelData.value)
             readonly property bool chosen: value === row.action
             width: parent.width
-            implicitHeight: optionLabel.implicitHeight + Style.space(12)
+            implicitHeight: optionText.implicitHeight + Style.space(12)
             hasCursor: optionMouse.containsMouse
             foreground: root.bar.foreground
 
-            Text {
-              id: optionLabel
+            Column {
+              id: optionText
               anchors.left: parent.left
               anchors.leftMargin: Style.space(6)
               anchors.right: check.left
               anchors.rightMargin: Style.space(6)
               anchors.verticalCenter: parent.verticalCenter
-              elide: Text.ElideRight
-              textFormat: Text.PlainText
-              text: option.value === "" ? "Plain transcription" : String(option.modelData.label)
-              color: root.bar.foreground
-              opacity: option.chosen ? 1 : 0.75
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              spacing: Style.space(1)
+
+              Text {
+                width: parent.width
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+                text: String(option.modelData.label)
+                color: root.bar.foreground
+                opacity: option.chosen ? 1 : 0.75
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+              Text {
+                width: parent.width
+                visible: text !== ""
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
+                text: String(option.modelData.description || "")
+                color: root.bar.foreground
+                opacity: 0.5
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
             Text {
               id: check
