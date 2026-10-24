@@ -47,6 +47,9 @@ Panel {
   // stays put when the list reloads.
   property bool cursorActive: false
   property string cursorKey: ""
+  // Set when the keyboard moved the cursor, which scrolls it into view; the
+  // mouse never scrolls the card under itself.
+  property bool cursorFromKeyboard: false
 
   visible: phase !== "" && !(hideWhenIdle && !busy && !errorFresh)
   implicitWidth: button.implicitWidth
@@ -161,8 +164,9 @@ Panel {
     return keys
   }
 
-  function pointAt(key) {
+  function pointAt(key, fromKeyboard) {
     root.cursorActive = true
+    root.cursorFromKeyboard = fromKeyboard === true
     root.cursorKey = key
   }
 
@@ -170,11 +174,13 @@ Panel {
     var keys = root.navKeys()
     if (keys.length === 0) return
     var i = keys.indexOf(root.cursorKey)
-    if (!root.cursorActive || i < 0) root.pointAt(keys[Math.max(i, 0)])
-    else root.pointAt(keys[Math.max(0, Math.min(keys.length - 1, i + dy))])
+    if (!root.cursorActive || i < 0) root.pointAt(keys[Math.max(i, 0)], true)
+    else root.pointAt(keys[Math.max(0, Math.min(keys.length - 1, i + dy))], true)
   }
 
   function activateCursor() {
+    // A reload may have removed the item under the cursor.
+    if (root.navKeys().indexOf(root.cursorKey) < 0) return
     var parts = root.cursorKey.split("\u001f")
     if (parts[0] === "row") root.toggleRow(parts[1])
     else if (parts[0] === "option") root.chooseAction(parts[1], parts[2])
@@ -297,7 +303,7 @@ Panel {
       onActivateRequested: if (root.cursorActive) root.activateCursor()
       onCloseRequested: {
         if (root.expandedClass !== "") {
-          root.pointAt(root.navKey("row", root.expandedClass))
+          root.pointAt(root.navKey("row", root.expandedClass), true)
           root.expandedClass = ""
         } else {
           root.close()
@@ -398,7 +404,7 @@ Panel {
     width: column.width
     implicitHeight: header.height + (expanded ? settingsBody.implicitHeight : 0)
     hasCursor: root.cursorActive && root.cursorKey === rowKey
-    onHasCursorChanged: if (hasCursor) root.reveal(header)
+    onHasCursorChanged: if (hasCursor && root.cursorFromKeyboard) root.reveal(header)
     current: expanded
     foreground: root.bar.foreground
     currentFill: Style.normalFillFor(root.bar.foreground, Commons.Color.accent)
@@ -559,7 +565,7 @@ Panel {
             width: parent.width
             implicitHeight: optionText.implicitHeight + Style.space(12)
             hasCursor: root.cursorActive && root.cursorKey === key
-            onHasCursorChanged: if (hasCursor) root.reveal(option)
+            onHasCursorChanged: if (hasCursor && root.cursorFromKeyboard) root.reveal(option)
             foreground: root.bar.foreground
 
             Column {
@@ -637,7 +643,7 @@ Panel {
           width: parent.width
           enabled: takesImages || row.screenshot
           hasCursor: root.cursorActive && root.cursorKey === key
-          onHasCursorChanged: if (hasCursor) root.reveal(shot)
+          onHasCursorChanged: if (hasCursor && root.cursorFromKeyboard) root.reveal(shot)
           onHovered: function(isHovered) { if (isHovered) root.pointAt(key) }
           opacity: enabled ? 1 : 0.4
           label: "Send a screenshot"

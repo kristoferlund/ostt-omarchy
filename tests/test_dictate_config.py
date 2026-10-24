@@ -93,9 +93,11 @@ class Read(unittest.TestCase):
         self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o640)
         self.assertEqual(os.listdir(self.dir.name), ["dictate.toml"])
 
-    def test_map_refuses_an_option_as_the_action(self):
+    def test_map_refuses_an_option_as_the_action_or_no_class(self):
         with self.assertRaises(dc.ConfigError):
             dc.main(["map", self.path, "Slack", "--screenshot"])
+        with self.assertRaises(dc.ConfigError):
+            dc.main(["map", self.path, "", "clean"])
 
 
 if __name__ == "__main__":

@@ -219,7 +219,9 @@ apps() {
   local clients workspaces mapped invalid actions error=""
   clients=$(hyprctl clients -j 2>/dev/null) || clients='[]'
   workspaces=$(hyprctl monitors -j 2>/dev/null | jq '[.[].activeWorkspace.id]') || workspaces='[]'
-  if mapped=$(config_tool apps "$config" 2>&1); then
+  if [[ ! -f $config ]]; then
+    mapped='{}'
+  elif mapped=$(config_tool apps "$config" 2>&1); then
     invalid=$(jq -r '.invalid | join(", ")' <<<"$mapped")
     [[ $invalid ]] && error="Not valid in $config, so dictated without context: $invalid"
     mapped=$(jq '.apps' <<<"$mapped")

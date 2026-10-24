@@ -75,7 +75,11 @@ prompts there:
   filler.
 
 If you already have an action with one of those ids, the setup uses it as it
-is. The actions run the agent with a 60-second limit (`timeout_secs`).
+is. The actions run the agent with a 60-second limit (`timeout_secs`), and
+name its program by the path the setup found (`tool_binary`), so dictation
+finds it whatever PATH the desktop session has. If the agent later moves (an
+upgrade into a new version folder, say) and dictation says its program is
+not found, correct or remove `tool_binary` in those actions.
 
 To choose the apps, right-click the bar widget: it lists the apps on the
 visible workspaces, and any already set up, with their current settings.

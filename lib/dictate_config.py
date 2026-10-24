@@ -150,6 +150,8 @@ def map_app(path, app, action, screenshot):
 
 
 def main(args):
+    if args[:1] == ["map"] and len(args) >= 3 and not args[2]:
+        raise ConfigError("Usage: ostt-dictate map <class> [<action> [--screenshot]]")
     match args:
         case ["apps", path]:
             print(json.dumps(apps(path)))
