@@ -86,9 +86,10 @@ also edit by hand (`screenshot` defaults to `false`):
 
 The setup offers the agents OSTT knows how to run with their tools switched
 off, so text on screen can't make them run commands or touch files: Claude
-Code, Codex, OpenCode, Gemini CLI, Pi, Oh My Pi and Hermes (`ostt agent list`
-shows which are installed). Hermes takes no screenshots, so dictation in an
-app with the screenshot on fails with it. A bash action gets the screenshot's
+Code, Codex, OpenCode, Gemini CLI, Pi, Oh My Pi, GitHub Copilot, Grok, Cursor,
+OpenClaw and Hermes (`ostt agent list` shows which are installed). Grok,
+Cursor, OpenClaw and Hermes take no screenshots, so dictation in an app with
+the screenshot on fails with them. A bash action gets the screenshot's
 path in `$OSTT_ATTACHMENT`. If something is wrong
 with an app's entry, or the screenshot fails, that dictation falls back to
 plain transcription and a notification says why.
