@@ -52,8 +52,8 @@ keyboard focus, so the text still lands in the app you were typing in.
 ## Context-aware dictation
 
 In apps you choose, dictation sends your words to a processing action, and if
-you allow it, a screenshot of the window too. An AI agent (Claude Code, Codex
-or OpenCode) tidies up your words and carries out spoken instructions such as
+you allow it, a screenshot of the window too. An AI agent you already use
+tidies up your words and carries out spoken instructions such as
 "finish this sentence as a haiku" or "reply saying I can't make it"; with the
 screenshot it also matches names and terms on screen. Every other app keeps
 plain transcription. No screenshot is taken unless you turn it on for that
@@ -84,9 +84,12 @@ also edit by hand (`screenshot` defaults to `false`):
 "thunderbird" = { action = "my-own-action" }
 ```
 
-With the screenshot on, any AI action using Claude Code, Codex or OpenCode
-receives it; a bash action gets its path in `$OSTT_ATTACHMENT`. Gemini CLI actions can't take
-an image yet, so dictation in an app mapped to one fails. If something is wrong
+The setup offers the agents OSTT knows how to run with their tools switched
+off, so text on screen can't make them run commands or touch files: Claude
+Code, Codex, OpenCode, Gemini CLI, Pi, Oh My Pi and Hermes (`ostt agent list`
+shows which are installed). Hermes takes no screenshots, so dictation in an
+app with the screenshot on fails with it. A bash action gets the screenshot's
+path in `$OSTT_ATTACHMENT`. If something is wrong
 with an app's entry, or the screenshot fails, that dictation falls back to
 plain transcription and a notification says why.
 

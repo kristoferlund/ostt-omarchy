@@ -54,14 +54,15 @@ EOF
 # Never stops the rest of the setup: it is called in a condition, and each step
 # checks for failure.
 setup_context() {
-  local tools=() missing=() tool model models candidate target id
+  local agents ids=() labels=() names=() choice name i tool model models candidate target id
   has_action assistant || missing+=(assistant)
   has_action clean || missing+=(clean)
   if (( ${#missing[@]} == 0 )); then
     write_plugin_config
     return 0
   fi
-  if ! ostt transcribe --help 2>/dev/null | grep -q -- --attach; then
+  # Agents come from OSTT, which knows how to run each one with its tools off.
+  if ! agents=$(ostt agent list --format json 2>/dev/null); then
     step "Context-aware dictation needs a newer OSTT, so it was skipped. Update OSTT and run this setup again to add it."
     return 0
   fi
@@ -71,33 +72,33 @@ setup_context() {
   echo
   confirm "Set up context-aware dictation?" || return 0
 
-  omarchy-cmd-missing claude || tools+=("Claude Code")
-  omarchy-cmd-missing codex || tools+=("Codex")
-  omarchy-cmd-missing opencode || tools+=("OpenCode")
-  if (( ${#tools[@]} == 0 )); then
-    step "Context-aware dictation runs on Claude Code, Codex or OpenCode, and none of them is installed. Install and sign in to one, then run this setup again."
+  mapfile -t ids < <(jq -r '.[] | select(.installed) | .id' <<<"$agents")
+  mapfile -t names < <(jq -r '.[] | select(.installed) | .name' <<<"$agents")
+  mapfile -t labels < <(jq -r '.[] | select(.installed) | .name + (if .images then "" else " (no screenshots)" end)' <<<"$agents")
+  if (( ${#ids[@]} == 0 )); then
+    step "Context-aware dictation runs on an AI agent such as $(jq -r '[.[].name] | join(", ")' <<<"$agents"), and none of them is installed. Install and sign in to one, then run this setup again."
     return 0
   fi
 
   step "Your dictation is processed by an AI agent you already use. It has to be signed in."
-  tool=$(gum choose --header "Which agent should process your dictation?" "${tools[@]}") || return 0
+  choice=$(gum choose --header "Which agent should process your dictation?" "${labels[@]}") || return 0
+  for i in "${!labels[@]}"; do
+    [[ ${labels[i]} == "$choice" ]] && { tool=${ids[i]}; name=${names[i]}; }
+  done
   echo
   case $tool in
-    "Claude Code")
-      tool=claude-code
+    claude-code)
       model=$(gum choose --header "Which Claude model? Haiku is fastest, so your text is pasted sooner." haiku sonnet opus) || return 0
       ;;
-    Codex)
-      tool=codex-cli
-      model=$(gum input --header "Which Codex model? Enter the name you would pass to codex --model." --placeholder "Model name") || return 0
-      ;;
-    OpenCode)
-      tool=opencode
+    opencode)
       if ! models=$(opencode models 2>/dev/null) || [[ ! $models ]]; then
         say "Could not list OpenCode's models, so context-aware dictation was not set up. Check that 'opencode models' works, then run this setup again."
         return 0
       fi
       model=$(gum filter --header "Which model? Type to filter. A fast model pastes your text sooner." <<<"$models") || return 0
+      ;;
+    *)
+      model=$(gum input --header "Which $name model? Enter its name as you would give it to $name. A fast model pastes your text sooner." --placeholder "Model name") || return 0
       ;;
   esac
   if [[ ! $model =~ ^[A-Za-z0-9._:/@-]+$ ]]; then
