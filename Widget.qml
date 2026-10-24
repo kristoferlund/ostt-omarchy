@@ -14,7 +14,8 @@ import qs.Ui
 // workspaces (and any already set up) with their current settings. Clicking a
 // row expands it in place, as the network panel does, to choose the
 // processing action for dictation in that app and whether to attach a
-// screenshot of its window.
+// screenshot of its window. Arrows or j/k move a cursor through it, Enter or
+// Space acts, Esc collapses and then closes.
 Panel {
   id: root
   moduleName: "ostt.dictation"
@@ -29,7 +30,7 @@ Panel {
 
   readonly property bool busy: phase === "recording" || phase === "transcribing"
 
-  // From `ostt-dictate apps`: [{ class, name, icon, action, screenshot }] and
+  // From `ostt-dictate apps`: [{ class, action, screenshot }] and
   // [{ id, name, description, images }].
   property var apps: []
   property var actionOptions: []
@@ -42,6 +43,10 @@ Panel {
   readonly property bool changing: mapProc.running || appsProc.running
   // The class of the one expanded row; kept across reloads after a change.
   property string expandedClass: ""
+  // The item under the keyboard (or mouse) cursor, as navKey() names it, so it
+  // stays put when the list reloads.
+  property bool cursorActive: false
+  property string cursorKey: ""
 
   visible: phase !== "" && !(hideWhenIdle && !busy && !errorFresh)
   implicitWidth: button.implicitWidth
@@ -84,8 +89,8 @@ Panel {
         value: String(actions[i].id),
         label: String(actions[i].name || actions[i].id),
         description: String(actions[i].description || ""),
-        // An OSTT too old to say is assumed to take images.
-        images: actions[i].images !== false
+        // An OSTT too old to say cannot attach images at all.
+        images: actions[i].images === true
       })
     root.actionOptions = options
     root.apps = data.apps || []
@@ -112,6 +117,84 @@ Panel {
     return action
   }
 
+  function appByClass(appClass) {
+    for (var i = 0; i < root.apps.length; i++)
+      if (String(root.apps[i]["class"]) === appClass) return root.apps[i]
+    return null
+  }
+
+  function toggleRow(appClass) {
+    root.expandedClass = root.expandedClass === appClass ? "" : appClass
+  }
+
+  function chooseAction(appClass, action) {
+    var app = root.appByClass(appClass)
+    if (root.changing || !app || app.action === action) return
+    root.setApp(appClass, action, app.screenshot === true)
+  }
+
+  // Only an action that takes images can get a screenshot; one already on can
+  // still be turned off.
+  function toggleScreenshot(appClass) {
+    var app = root.appByClass(appClass)
+    if (root.changing || !app) return
+    if (!root.actionTakesImages(app.action) && app.screenshot !== true) return
+    root.setApp(appClass, app.action, app.screenshot !== true)
+  }
+
+  // Keyboard navigation: every row, then the options and the switch of the
+  // expanded one.
+  function navKey(kind, appClass, value) {
+    return [kind, appClass, value || ""].join("\u001f")
+  }
+
+  function navKeys() {
+    var keys = []
+    for (var i = 0; i < root.apps.length; i++) {
+      var appClass = String(root.apps[i]["class"])
+      keys.push(root.navKey("row", appClass))
+      if (appClass !== root.expandedClass) continue
+      for (var j = 0; j < root.actionOptions.length; j++)
+        keys.push(root.navKey("option", appClass, root.actionOptions[j].value))
+      keys.push(root.navKey("screenshot", appClass))
+    }
+    return keys
+  }
+
+  function pointAt(key) {
+    root.cursorActive = true
+    root.cursorKey = key
+  }
+
+  function moveCursor(dy) {
+    var keys = root.navKeys()
+    if (keys.length === 0) return
+    var i = keys.indexOf(root.cursorKey)
+    if (!root.cursorActive || i < 0) root.pointAt(keys[Math.max(i, 0)])
+    else root.pointAt(keys[Math.max(0, Math.min(keys.length - 1, i + dy))])
+  }
+
+  function activateCursor() {
+    var parts = root.cursorKey.split("\u001f")
+    if (parts[0] === "row") root.toggleRow(parts[1])
+    else if (parts[0] === "option") root.chooseAction(parts[1], parts[2])
+    else if (parts[0] === "screenshot") root.toggleScreenshot(parts[1])
+  }
+
+  // Scrolls the card so the item under the cursor is in view.
+  function reveal(item) {
+    var y = item.mapToItem(column, 0, 0).y
+    if (y < scroller.contentY) scroller.contentY = y
+    else if (y + item.height > scroller.contentY + scroller.height)
+      scroller.contentY = y + item.height - scroller.height
+  }
+
+  // A Chrome web app without a desktop entry is named by its host.
+  function webAppHost(appClass) {
+    var match = /^chrome-([^_]+)__/.exec(appClass)
+    return match ? match[1] : ""
+  }
+
   function iconSource(icon) {
     if (icon === "") return ""
     if (icon.charAt(0) === "/") return "file://" + icon
@@ -122,8 +205,10 @@ Panel {
     if (opened) {
       root.mapError = ""
       appsProc.running = true
+    } else {
+      root.expandedClass = ""
+      root.cursorActive = false
     }
-    else root.expandedClass = ""
   }
 
   Process {
@@ -208,9 +293,15 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      onMoveRequested: function(dx, dy) { root.moveCursor(dy) }
+      onActivateRequested: if (root.cursorActive) root.activateCursor()
       onCloseRequested: {
-        if (root.expandedClass !== "") root.expandedClass = ""
-        else root.close()
+        if (root.expandedClass !== "") {
+          root.pointAt(root.navKey("row", root.expandedClass))
+          root.expandedClass = ""
+        } else {
+          root.close()
+        }
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
@@ -223,65 +314,65 @@ Panel {
         boundsBehavior: Flickable.StopAtBounds
         interactive: contentHeight > height
 
-      Column {
-        id: column
-        width: scroller.width
-        spacing: Style.space(12)
+        Column {
+          id: column
+          width: scroller.width
+          spacing: Style.space(12)
 
-        PanelHero {
-          width: parent.width
-          title: "Dictation"
-          meta: root.phase === "error" ? "Last dictation failed: " + root.errorText : "Ready"
-          foreground: root.bar.foreground
-          fontFamily: root.bar.fontFamily
-          // The OSTT wordmark, as in the terminal app; text, so it takes the
-          // theme's colour.
-          iconComponent: Component {
+          PanelHero {
+            width: parent.width
+            title: "Dictation"
+            meta: root.phase === "error" ? "Last dictation failed: " + root.errorText : "Ready"
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+            // The OSTT wordmark, as in the terminal app; text, so it takes the
+            // theme's colour.
+            iconComponent: Component {
+              Text {
+                textFormat: Text.PlainText
+                text: "┏┓┏╋╋\n┗┛┛┗┗"
+                color: root.bar.foreground
+                font.family: "monospace"
+                font.pixelSize: Style.font.title
+              }
+            }
+          }
+
+          PanelSeparator {
+            foreground: root.bar.foreground
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(4)
+
+            PanelSectionHeader {
+              text: "APPS"
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+            }
+
             Text {
+              width: parent.width
+              bottomPadding: Style.space(4)
+              wrapMode: Text.Wrap
               textFormat: Text.PlainText
-              text: "┏┓┏╋╋\n┗┛┛┗┗"
-              color: root.bar.foreground
-              font.family: "monospace"
-              font.pixelSize: Style.font.title
+              readonly property string error: root.mapError !== "" ? root.mapError : root.appsError
+              text: error !== "" ? error
+                : root.apps.length === 0 ? "No apps are open on the visible workspaces."
+                : "What dictation does in each app. Apps not listed get plain transcription."
+              color: error !== "" ? root.bar.urgent : root.bar.foreground
+              opacity: error !== "" ? 1 : 0.6
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Repeater {
+              model: root.apps
+              delegate: AppRow {}
             }
           }
         }
-
-        PanelSeparator {
-          foreground: root.bar.foreground
-        }
-
-        Column {
-          width: parent.width
-          spacing: Style.space(4)
-
-          PanelSectionHeader {
-            text: "APPS"
-            foreground: root.bar.foreground
-            fontFamily: root.bar.fontFamily
-          }
-
-          Text {
-            width: parent.width
-            bottomPadding: Style.space(4)
-            wrapMode: Text.Wrap
-            textFormat: Text.PlainText
-            readonly property string error: root.mapError !== "" ? root.mapError : root.appsError
-            text: error !== "" ? error
-              : root.apps.length === 0 ? "No apps are open on the visible workspaces."
-              : "What dictation does in each app. Apps not listed get plain transcription."
-            color: error !== "" ? root.bar.urgent : root.bar.foreground
-            opacity: error !== "" ? 1 : 0.6
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          Repeater {
-            model: root.apps
-            delegate: AppRow {}
-          }
-        }
-      }
       }
     }
   }
@@ -292,14 +383,22 @@ Panel {
     id: row
     required property var modelData
     readonly property string appClass: String(modelData["class"])
-    readonly property string appName: String(modelData.name || appClass)
     readonly property string action: String(modelData.action || "")
     readonly property bool screenshot: modelData.screenshot === true
     readonly property bool expanded: root.expandedClass === appClass
+    readonly property string rowKey: root.navKey("row", appClass)
+    // The app's desktop entry, as the launcher finds it; looked up again when
+    // the shell's list of applications changes.
+    readonly property var entry: {
+      DesktopEntries.applications.values
+      return DesktopEntries.heuristicLookup(appClass)
+    }
+    readonly property string appName: entry ? entry.name : (root.webAppHost(appClass) || appClass)
 
     width: column.width
     implicitHeight: header.height + (expanded ? settingsBody.implicitHeight : 0)
-    hasCursor: headerMouse.containsMouse && !expanded
+    hasCursor: root.cursorActive && root.cursorKey === rowKey
+    onHasCursorChanged: if (hasCursor) root.reveal(header)
     current: expanded
     foreground: root.bar.foreground
     currentFill: Style.normalFillFor(root.bar.foreground, Commons.Color.accent)
@@ -313,7 +412,8 @@ Panel {
       height: header.height
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onClicked: root.expandedClass = row.expanded ? "" : row.appClass
+      onContainsMouseChanged: if (containsMouse) root.pointAt(row.rowKey)
+      onClicked: root.toggleRow(row.appClass)
     }
 
     Item {
@@ -333,7 +433,7 @@ Panel {
         height: width
         sourceSize.width: width * 2
         sourceSize.height: height * 2
-        source: root.iconSource(String(row.modelData.icon || ""))
+        source: row.entry ? root.iconSource(String(row.entry.icon || "")) : ""
         visible: status === Image.Ready
       }
       Text {
@@ -455,9 +555,11 @@ Panel {
             required property var modelData
             readonly property string value: String(modelData.value)
             readonly property bool chosen: value === row.action
+            readonly property string key: root.navKey("option", row.appClass, value)
             width: parent.width
             implicitHeight: optionText.implicitHeight + Style.space(12)
-            hasCursor: optionMouse.containsMouse
+            hasCursor: root.cursorActive && root.cursorKey === key
+            onHasCursorChanged: if (hasCursor) root.reveal(option)
             foreground: root.bar.foreground
 
             Column {
@@ -508,7 +610,8 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: if (!root.changing && !option.chosen) root.setApp(row.appClass, option.value, row.screenshot)
+              onContainsMouseChanged: if (containsMouse) root.pointAt(option.key)
+              onClicked: root.chooseAction(row.appClass, option.value)
             }
           }
         }
@@ -527,12 +630,15 @@ Panel {
           fontFamily: root.bar.fontFamily
         }
 
-        // Only an action that takes images can get a screenshot; one already
-        // on can still be turned off.
         Toggle {
+          id: shot
           readonly property bool takesImages: root.actionTakesImages(row.action)
+          readonly property string key: root.navKey("screenshot", row.appClass)
           width: parent.width
           enabled: takesImages || row.screenshot
+          hasCursor: root.cursorActive && root.cursorKey === key
+          onHasCursorChanged: if (hasCursor) root.reveal(shot)
+          onHovered: function(isHovered) { if (isHovered) root.pointAt(key) }
           opacity: enabled ? 1 : 0.4
           label: "Send a screenshot"
           description: row.action === "" ? "Choose an action first."
@@ -542,7 +648,7 @@ Panel {
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
           titleSize: Style.font.bodySmall
-          onClicked: if (enabled && !root.changing) root.setApp(row.appClass, row.action, !row.screenshot)
+          onClicked: root.toggleScreenshot(row.appClass)
         }
       }
     }

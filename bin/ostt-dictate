@@ -12,8 +12,7 @@
 #   ostt-dictate status [--json] [--follow]
 #   ostt-dictate levels   follow the input level while recording
 #   ostt-dictate apps     JSON: processing actions, and the apps on visible
-#                         workspaces or in the config, with their name, icon
-#                         and settings
+#                         workspaces or in the config, with their settings
 #   ostt-dictate map <class> [<action> [--screenshot]]
 #                         set an app's action; no action clears it
 
@@ -30,6 +29,23 @@ action_file="$dir/action"
 config="${XDG_CONFIG_HOME:-$HOME/.config}/ostt/dictate.toml"
 
 mkdir -p "$dir" && chmod 700 "$dir"
+
+# Reads and edits dictate.toml; see lib/dictate_config.py.
+config_tool() {
+  timeout 3 python3 "$(dirname "$(readlink -f "$0")")/../lib/dictate_config.py" "$@"
+}
+
+# The error in ostt's stderr ($1): from its "Error: " line on, without the
+# prefix and the "Caused by:" layout; its last line if there is none; or $2.
+ostt_error() {
+  local error
+  error=$(sed -n '/^Error: /,$p' <<<"$1" |
+    sed -e '1s/^Error: //' -e '/^Caused by:$/d' -e 's/^ *\([0-9]*: \)\{0,1\}//' -e '/^$/d')
+  [[ $error ]] || error=$(grep -v '^[[:space:]]*$' <<<"$1" | tail -n1)
+  error=${error:-${2:-}}
+  (( ${#error} > 400 )) && error="${error:0:400}…"
+  printf '%s' "$error"
+}
 
 notify() {
   notify-send -a OSTT -i audio-input-microphone "$1" "$2" 2>/dev/null || true
@@ -76,33 +92,36 @@ lock() {
 # release waits for it.
 pick_action() {
   [[ -f $config ]] || return 0
-  local win class apps reason action actions images
+  local win class app action actions found
   win=$(timeout 2 hyprctl activewindow -j 2>/dev/null) || return 0
   class=$(jq -r '.class // empty' <<<"$win" 2>/dev/null)
   [[ $class ]] || return 0
-  if ! apps=$(config_apps 2>&1); then
-    notify "Dictating without context" "Could not read $config: ${apps##*$'\n'}"
+  if ! app=$(config_tool lookup "$config" "$class" 2>&1); then
+    notify "Dictating without context" "${app:-Could not read $config.}"
     return 0
   fi
-  reason=$(jq -r --arg class "$class" '.invalid[$class] // empty' <<<"$apps")
-  if [[ $reason ]]; then
-    notify "Dictating without context" "The entry for $class in $config is not valid: $reason"
-    return 0
-  fi
-  action=$(jq -r --arg class "$class" '.apps[$class].action // empty' <<<"$apps")
+  action=$(jq -r '.action // empty' <<<"$app")
   [[ $action ]] || return 0
   if ! actions=$(timeout 5 ostt process list --format json 2>&1); then
-    notify "Dictating without context" "Could not list OSTT's processing actions: ${actions##*$'\n'}"
+    notify "Dictating without context" "$(ostt_error "$actions" "Could not list OSTT's processing actions.")"
     return 0
   fi
-  # Empty when there is no such action; an OSTT too old to say takes images.
-  images=$(jq -r --arg id "$action" 'first(.[] | select(.id == $id) | if .images == null then true else .images end)' <<<"$actions" 2>/dev/null)
-  if [[ ! $images ]]; then
+  found=$(jq -c --arg id "$action" 'first(.[] | select(.id == $id)) // empty' <<<"$actions")
+  if [[ ! $found ]]; then
     notify "Dictating without context" "$class is set to '$action', which is not a processing action in ostt.toml."
     return 0
   fi
-  if jq -e --arg class "$class" '.apps[$class].screenshot' <<<"$apps" >/dev/null; then
-    if [[ $images != true ]]; then
+  # `images` came with --attach; an OSTT without it cannot take a screenshot.
+  if ! jq -e 'has("images")' <<<"$found" >/dev/null; then
+    notify "Dictating without context" "Context-aware dictation needs a newer OSTT."
+    return 0
+  fi
+  if jq -e '.error' <<<"$found" >/dev/null; then
+    notify "Dictating without context" "$(jq -r '.error' <<<"$found")"
+    return 0
+  fi
+  if jq -e '.screenshot' <<<"$app" >/dev/null; then
+    if ! jq -e '.images' <<<"$found" >/dev/null; then
       notify "Dictating without a screenshot" "'$action' runs on an agent that takes no images."
     elif ! timeout 5 grim -t jpeg -q 60 -g "$(jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' <<<"$win")" "$context" 2>/dev/null; then
       # JPEG at 60% keeps small text legible at a fraction of the PNG size.
@@ -131,8 +150,12 @@ start() {
   recording && return 0
   transcribing && fail "Still transcribing the previous dictation."
   command -v ostt >/dev/null || fail "OSTT is not installed."
-  # A missing model fails at the key press, not after speaking.
-  ostt model current >/dev/null 2>&1 || fail "No transcription model is selected. Run 'ostt model'."
+  # A missing model, or a broken config, fails at the key press, not after
+  # speaking.
+  local error
+  if ! error=$(ostt model current 2>&1 >/dev/null); then
+    fail "$(ostt_error "$error" "No transcription model is selected. Run 'ostt model'.")"
+  fi
 
   rm -f "$error_file" "$audio" "$context" "$action_file"
   : >"$levels"
@@ -175,193 +198,53 @@ cancel() {
 
 # The background half of stop: transcribe, process, paste, report failures.
 transcribe() {
-  local output status action args=(--paste)
+  local error status action args=(--paste)
   action=$(cat "$action_file" 2>/dev/null)
   [[ $action ]] && args+=(--process "$action")
   [[ $action && -f $context ]] && args+=(--attach "$context")
-  output=$(ostt transcribe "$audio" "${args[@]}" 2>&1 >/dev/null)
+  error=$(ostt transcribe "$audio" "${args[@]}" 2>&1 >/dev/null)
   status=$?
-  if (( status != 0 )); then
-    # ostt ends with "Error: <message>", which can span lines (a tool's own
-    # stderr follows the action's error), after any warnings. Show all of it,
-    # or the last line if ostt died without one.
-    output=$(printf '%s\n' "$output" | sed -n '/^[Ee]rror: /,$p' | sed '1s/^[Ee]rror: //' | grep -v '^[[:space:]]*$' ||
-      printf '%s\n' "$output" | grep -v '^[[:space:]]*$' | tail -n1)
-    output=${output:-Transcription failed.}
-    output=${output#Processing failed, so the transcription was output unprocessed: }
-    (( ${#output} > 400 )) && output="${output:0:400}…"
-    printf '%s\n' "$output" >"$error_file"
-  fi
   case $status in
     0) rm -f "$audio" "$context" ;;
-    # The action failed, and ostt pasted the words unprocessed instead; they
-    # are in its history, so processing can be retried from there.
+    # The action failed and ostt pasted the words unprocessed instead; they
+    # are in its history, so processing can be retried from there. The
+    # error's first line says just that; its causes say why.
     3)
       rm -f "$audio" "$context"
-      notify "Processing failed, pasted as heard" "$output"$'\n'"To process again: ostt process 1 $action"
+      notify "Processing failed, pasted as heard" \
+        "$(ostt_error "$error" | sed 1d)"$'\n'"To process again: ostt process 1 $action"
       ;;
     # Keep the files for a retry.
-    *) notify "Dictation failed" "$output"$'\n'"Retry with: ostt transcribe $audio ${args[*]}" ;;
+    *)
+      error=$(ostt_error "$error" "Transcription failed.")
+      printf '%s\n' "$error" >"$error_file"
+      notify "Dictation failed" "$error"$'\n'"Retry with: ostt transcribe $audio ${args[*]}"
+      ;;
   esac
   rm -f "$worker_pid" "$action_file"
 }
 
-# Reads [apps] from the config as JSON: {"apps": {class: {action, screenshot}},
-# "invalid": {class: reason}}. A malformed entry only affects its own app; a
-# file that is not valid TOML fails as a whole.
-config_apps() {
-  [[ -f $config ]] || { echo '{"apps": {}, "invalid": {}}'; return 0; }
-  timeout 3 python3 - "$config" <<'EOF'
-import json, sys, tomllib
-with open(sys.argv[1], "rb") as f:
-    apps = tomllib.load(f).get("apps", {})
-if not isinstance(apps, dict):
-    sys.exit("[apps] must be a table")
-valid, invalid = {}, {}
-for app, entry in apps.items():
-    if (isinstance(entry, dict) and isinstance(entry.get("action"), str)
-            and isinstance(entry.get("screenshot", False), bool)):
-        valid[app] = {"action": entry["action"], "screenshot": entry.get("screenshot", False)}
-    else:
-        invalid[app] = 'it must look like { action = "assistant", screenshot = true }'
-print(json.dumps({"apps": valid, "invalid": invalid}))
-EOF
-}
-
-# Prints a JSON object of window class -> { name, icon }, from the desktop
-# entries whose StartupWMClass or file name matches the class. Earlier data
-# dirs win. `apps` names a Chrome web app without an entry by its host.
-app_names() {
-  python3 - "$@" <<'EOF'
-import glob, json, os, sys
-classes = {c.lower(): c for c in sys.argv[1:]}
-dirs = [os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")]
-dirs += (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
-names = {}
-for d in dirs:
-    for path in sorted(glob.glob(os.path.join(d, "applications", "*.desktop"))):
-        entry, section = {}, None
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("["):
-                        section = line
-                    elif section == "[Desktop Entry]" and "=" in line:
-                        key, value = line.split("=", 1)
-                        entry.setdefault(key.strip(), value.strip())
-        except OSError:
-            continue
-        if not entry.get("Name") or entry.get("Hidden") == "true":
-            continue
-        stem = os.path.basename(path)[:-len(".desktop")].lower()
-        for key in (entry.get("StartupWMClass", "").lower(), stem, stem.rsplit(".", 1)[-1]):
-            if key in classes:
-                names.setdefault(classes[key], {"name": entry["Name"], "icon": entry.get("Icon", "")})
-print(json.dumps(names))
-EOF
-}
-
 apps() {
-  local clients workspaces mapped invalid actions classes names error=""
+  local clients workspaces mapped invalid actions error=""
   clients=$(hyprctl clients -j 2>/dev/null) || clients='[]'
   workspaces=$(hyprctl monitors -j 2>/dev/null | jq '[.[].activeWorkspace.id]') || workspaces='[]'
-  if mapped=$(config_apps 2>&1); then
-    invalid=$(jq -r '.invalid | keys | join(", ")' <<<"$mapped")
+  if mapped=$(config_tool apps "$config" 2>&1); then
+    invalid=$(jq -r '.invalid | join(", ")' <<<"$mapped")
     [[ $invalid ]] && error="Not valid in $config, so dictated without context: $invalid"
     mapped=$(jq '.apps' <<<"$mapped")
   else
-    error="Could not read $config: ${mapped##*$'\n'}"
+    error=${mapped:-Could not read $config.}
     mapped='{}'
   fi
   actions=$(ostt process list --format json 2>/dev/null) || actions='[]'
-  mapfile -t classes < <(jq -r '.[].class' <<<"$clients" 2>/dev/null; jq -r 'keys[]' <<<"$mapped")
-  names=$(app_names "${classes[@]}" 2>/dev/null) || names='{}'
   jq -n --argjson clients "$clients" --argjson workspaces "$workspaces" \
-    --argjson mapped "$mapped" --argjson actions "$actions" --argjson names "$names" --arg error "$error" '
+    --argjson mapped "$mapped" --argjson actions "$actions" --arg error "$error" '
     ($clients
       | map(select(.class != "" and (.workspace.id as $id | $workspaces | index($id))))
-      | map(.class) | unique | map({class: .})) as $visible
-    | ($mapped | keys - ($visible | map(.class)) | map({class: .})) as $elsewhere
+      | map(.class) | unique) as $visible
     | {error: $error, actions: $actions,
-       apps: (($visible + $elsewhere)
-         | map(. + {name: ($names[.class].name // (.class | capture("^chrome-(?<host>[^_]+)__").host) // .class),
-                   icon: ($names[.class].icon // ""),
-                   action: ($mapped[.class].action // ""),
-                   screenshot: ($mapped[.class].screenshot // false)}))}'
-}
-
-# Sets or clears one app's entry under [apps], keeping the rest of the file
-# as written. The file is replaced only if the result parses to the original
-# document with just that entry changed.
-map_app() {
-  if [[ ! ${1:-} || ${2:-} == -* ]] || (( $# > 3 )) || [[ $# == 3 && $3 != --screenshot ]]; then
-    echo "Usage: ostt-dictate map <class> [<action> [--screenshot]]" >&2
-    exit 1
-  fi
-  mkdir -p "${config%/*}"
-  python3 - "$config" "$1" "${2:-}" "${3:+1}" <<'EOF'
-import json, os, re, sys, tempfile, tomllib
-path, app, action, screenshot = sys.argv[1:5]
-entry = {"action": action, "screenshot": bool(screenshot)} if action else None
-try:
-    with open(path, newline="") as f:
-        original = f.read()
-except FileNotFoundError:
-    original = ""
-try:
-    before = tomllib.loads(original)
-except tomllib.TOMLDecodeError as e:
-    sys.exit(f"{path} is not valid TOML: {e}")
-if not isinstance(before.get("apps", {}), dict):
-    sys.exit(f"[apps] in {path} must be a table")
-newline = "\r\n" if "\r\n" in original else "\n"
-lines = original.splitlines()
-
-def key_of(line):
-    """The key a one-line `key = value` defines, or None."""
-    try:
-        parsed = tomllib.loads(line)
-    except tomllib.TOMLDecodeError:
-        return None
-    return next(iter(parsed)) if len(parsed) == 1 else None
-
-header = re.compile(r"\s*\[\s*apps\s*\]\s*(#.*)?")
-start = next((i for i, l in enumerate(lines) if header.fullmatch(l)), None)
-if start is None:
-    if lines and lines[-1].strip():
-        lines.append("")
-    lines.append("[apps]")
-    start = len(lines) - 1
-end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
-section = [l for l in lines[start + 1:end] if key_of(l) != app]
-if action:
-    last_key = max((i for i, l in enumerate(section) if key_of(l) is not None), default=-1)
-    value = json.dumps(action, ensure_ascii=False)
-    flag = "true" if screenshot else "false"
-    section.insert(last_key + 1, f"{json.dumps(app, ensure_ascii=False)} = {{ action = {value}, screenshot = {flag} }}")
-text = newline.join(lines[:start + 1] + section + lines[end:]) + newline
-
-expected = dict(before)
-expected["apps"] = dict(before.get("apps", {}))
-if entry:
-    expected["apps"][app] = entry
-else:
-    expected["apps"].pop(app, None)
-try:
-    after = tomllib.loads(text)
-except tomllib.TOMLDecodeError:
-    after = None
-if after != expected:
-    sys.exit(f"Could not change {app} in {path} safely; edit [apps] by hand.")
-target = os.path.realpath(path)
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".dictate.")
-with os.fdopen(fd, "w", newline="") as f:
-    f.write(text)
-if os.path.exists(target):
-    os.chmod(tmp, os.stat(target).st_mode & 0o777)
-os.replace(tmp, target)
-EOF
+       apps: ($visible + ($mapped | keys - $visible)
+         | map({class: ., action: ($mapped[.].action // ""), screenshot: ($mapped[.].screenshot // false)}))}'
 }
 
 status() {
@@ -400,7 +283,7 @@ case "${1:-}" in
   status) shift; status "$@" ;;
   levels) exec tail -n0 -F "$levels" 2>/dev/null ;;
   apps) apps ;;
-  map) shift; map_app "$@" ;;
+  map) shift; config_tool map "$config" "$@" ;;
   __transcribe) transcribe ;;
   *) echo "Usage: ostt-dictate <start|stop|toggle|cancel|status [--json] [--follow]|levels|apps|map <class> [<action> [--screenshot]]>" >&2; exit 1 ;;
 esac
