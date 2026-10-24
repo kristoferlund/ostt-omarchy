@@ -175,23 +175,34 @@ cancel() {
 
 # The background half of stop: transcribe, process, paste, report failures.
 transcribe() {
-  local output action args=(--paste)
+  local output status action args=(--paste)
   action=$(cat "$action_file" 2>/dev/null)
   [[ $action ]] && args+=(--process "$action")
   [[ $action && -f $context ]] && args+=(--attach "$context")
-  if output=$(ostt transcribe "$audio" "${args[@]}" 2>&1 >/dev/null); then
-    rm -f "$audio" "$context"
-  else
+  output=$(ostt transcribe "$audio" "${args[@]}" 2>&1 >/dev/null)
+  status=$?
+  if (( status != 0 )); then
     # ostt ends with "Error: <message>", which can span lines (a tool's own
     # stderr follows the action's error), after any warnings. Show all of it,
-    # or the last line if ostt died without one; keep the files for a retry.
+    # or the last line if ostt died without one.
     output=$(printf '%s\n' "$output" | sed -n '/^[Ee]rror: /,$p' | sed '1s/^[Ee]rror: //' | grep -v '^[[:space:]]*$' ||
       printf '%s\n' "$output" | grep -v '^[[:space:]]*$' | tail -n1)
     output=${output:-Transcription failed.}
+    output=${output#Processing failed, so the transcription was output unprocessed: }
     (( ${#output} > 400 )) && output="${output:0:400}…"
     printf '%s\n' "$output" >"$error_file"
-    notify "Dictation failed" "$output"$'\n'"Retry with: ostt transcribe $audio ${args[*]}"
   fi
+  case $status in
+    0) rm -f "$audio" "$context" ;;
+    # The action failed, and ostt pasted the words unprocessed instead; they
+    # are in its history, so processing can be retried from there.
+    3)
+      rm -f "$audio" "$context"
+      notify "Processing failed, pasted as heard" "$output"$'\n'"To process again: ostt process 1 $action"
+      ;;
+    # Keep the files for a retry.
+    *) notify "Dictation failed" "$output"$'\n'"Retry with: ostt transcribe $audio ${args[*]}" ;;
+  esac
   rm -f "$worker_pid" "$action_file"
 }
 
