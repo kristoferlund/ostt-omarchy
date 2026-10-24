@@ -4,16 +4,17 @@
 # recording to `ostt transcribe --paste`. Each command returns at once; the
 # recorder and the transcription run in the background.
 #
-# Apps listed in ~/.config/ostt/dictate.toml get context-aware dictation: a
-# screenshot of the window is taken at start, and the transcript goes through
-# the listed processing action with the screenshot attached.
+# Apps listed in ~/.config/ostt/dictate.toml send the transcript through their
+# processing action; with screenshot = true, a screenshot of the window taken
+# at start is attached.
 #
 #   ostt-dictate start | stop | toggle | cancel
 #   ostt-dictate status [--json] [--follow]
 #   ostt-dictate levels   follow the input level while recording
 #   ostt-dictate apps     JSON: processing actions, and the apps on visible
-#                         workspaces or in the config, with their action
-#   ostt-dictate map <class> [action]   set an app's action; none clears it
+#                         workspaces or in the config, with their settings
+#   ostt-dictate map <class> [<action> [--screenshot]]
+#                         set an app's action; no action clears it
 
 set -u
 
@@ -67,30 +68,21 @@ lock() {
   flock -w 10 8 || fail "Dictation is busy; try again."
 }
 
-# Looks up the focused app in the config. A listed app gets its action and a
-# screenshot of its window; any other app gets plain dictation. Problems are
-# reported and fall back to plain dictation rather than blocking it.
+# Looks up the focused app in the config. A listed app gets its action, and a
+# screenshot of its window if it asks for one; any other app gets plain
+# dictation. Problems are reported and fall back to plain dictation rather
+# than blocking it.
 pick_action() {
   [[ -f $config ]] || return 0
-  local win class action actions
+  local win class apps action actions
   win=$(hyprctl activewindow -j 2>/dev/null) || return 0
   class=$(jq -r '.class // empty' <<<"$win" 2>/dev/null)
   [[ $class ]] || return 0
-  if ! action=$(python3 - "$config" "$class" 2>&1 <<'EOF'
-import sys, tomllib
-with open(sys.argv[1], "rb") as f:
-    apps = tomllib.load(f).get("apps", {})
-if not isinstance(apps, dict):
-    sys.exit("[apps] must be a table")
-action = apps.get(sys.argv[2], "")
-if not isinstance(action, str):
-    sys.exit(f'"{sys.argv[2]}" must name a processing action')
-print(action)
-EOF
-  ); then
-    notify "Dictating without context" "Could not read $config: ${action##*$'\n'}"
+  if ! apps=$(config_apps 2>&1); then
+    notify "Dictating without context" "Could not read $config: ${apps##*$'\n'}"
     return 0
   fi
+  action=$(jq -r --arg class "$class" '.[$class].action // empty' <<<"$apps")
   [[ $action ]] || return 0
   if ! actions=$(ostt process list --format json 2>&1); then
     notify "Dictating without context" "Could not list OSTT's processing actions: ${actions##*$'\n'}"
@@ -101,7 +93,9 @@ EOF
     return 0
   fi
   # JPEG at 60% keeps small text legible at a fraction of the PNG size.
-  if ! grim -t jpeg -q 60 -g "$(jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' <<<"$win")" "$context" 2>/dev/null; then
+  if jq -e --arg class "$class" '.[$class].screenshot' <<<"$apps" >/dev/null &&
+    ! grim -t jpeg -q 60 -g "$(jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' <<<"$win")" "$context" 2>/dev/null; then
+    rm -f "$context"
     notify "Dictating without context" "Could not take a screenshot of $class."
     return 0
   fi
@@ -171,7 +165,8 @@ cancel() {
 transcribe() {
   local output action args=(--paste)
   action=$(cat "$action_file" 2>/dev/null)
-  [[ $action ]] && args+=(--process "$action" --attach "$context")
+  [[ $action ]] && args+=(--process "$action")
+  [[ $action && -f $context ]] && args+=(--attach "$context")
   if output=$(ostt transcribe "$audio" "${args[@]}" 2>&1 >/dev/null); then
     rm -f "$audio" "$context"
   else
@@ -183,8 +178,27 @@ transcribe() {
   rm -f "$worker_pid" "$action_file"
 }
 
-# Reads [apps] from the config as a JSON object of class -> action.
+# Reads [apps] from the config as a JSON object of
+# class -> { action, screenshot }. Any malformed entry fails the whole file.
 config_apps() {
+  [[ -f $config ]] || { echo '{}'; return 0; }
+  python3 - "$config" <<'EOF'
+import json, sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    apps = tomllib.load(f).get("apps", {})
+if not isinstance(apps, dict):
+    sys.exit("[apps] must be a table")
+out = {}
+for app, entry in apps.items():
+    if not (isinstance(entry, dict) and isinstance(entry.get("action"), str)
+            and isinstance(entry.get("screenshot", False), bool)):
+        sys.exit(f'"{app}" must look like {{ action = "screen-context", screenshot = true }}')
+    out[app] = {"action": entry["action"], "screenshot": entry.get("screenshot", False)}
+print(json.dumps(out))
+EOF
+}
+
+apps() {
   [[ -f $config ]] || { echo '{}'; return 0; }
   python3 - "$config" <<'EOF'
 import json, sys, tomllib
@@ -212,17 +226,22 @@ apps() {
       | group_by(.class) | map({class: .[0].class, title: .[0].title})) as $visible
     | ($mapped | keys - ($visible | map(.class)) | map({class: ., title: ""})) as $elsewhere
     | {error: $error, actions: $actions,
-       apps: (($visible + $elsewhere) | map(. + {action: ($mapped[.class] // "")}))}'
+       apps: (($visible + $elsewhere)
+         | map(. + {action: ($mapped[.class].action // ""), screenshot: ($mapped[.class].screenshot // false)}))}'
 }
 
 # Sets or clears one app's entry under [apps], keeping the rest of the file
 # as written, and replaces the file only once the result parses.
 map_app() {
-  [[ ${1:-} ]] || { echo "Usage: ostt-dictate map <class> [action]" >&2; exit 1; }
+  if [[ ! ${1:-} ]] || (( $# > 3 )) || [[ $# == 3 && $3 != --screenshot ]]; then
+    echo "Usage: ostt-dictate map <class> [<action> [--screenshot]]" >&2
+    exit 1
+  fi
   mkdir -p "${config%/*}"
-  python3 - "$config" "$1" "${2:-}" <<'EOF'
+  python3 - "$config" "$1" "${2:-}" "${3:+1}" <<'EOF'
 import json, os, re, sys, tempfile, tomllib
-path, app, action = sys.argv[1:4]
+path, app, action, screenshot = sys.argv[1:5]
+entry = {"action": action, "screenshot": bool(screenshot)} if action else None
 try:
     with open(path) as f:
         lines = f.read().splitlines()
@@ -246,7 +265,9 @@ end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startsw
 section = [l for l in lines[start + 1:end] if key_of(l) != app]
 if action:
     last_key = max((i for i, l in enumerate(section) if key_of(l) is not None), default=-1)
-    section.insert(last_key + 1, f"{json.dumps(app, ensure_ascii=False)} = {json.dumps(action, ensure_ascii=False)}")
+    value = json.dumps(action, ensure_ascii=False)
+    flag = "true" if screenshot else "false"
+    section.insert(last_key + 1, f"{json.dumps(app, ensure_ascii=False)} = {{ action = {value}, screenshot = {flag} }}")
 text = "\n".join(lines[:start + 1] + section + lines[end:]) + "\n"
 
 try:
@@ -254,7 +275,7 @@ try:
     updated = tomllib.loads(text).get("apps", {}).get(app)
 except tomllib.TOMLDecodeError as e:
     sys.exit(f"{path} is not valid TOML: {e}")
-if updated != (action or None):
+if updated != entry:
     sys.exit(f"Could not update {path}")
 target = os.path.realpath(path)
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".dictate.")
@@ -304,5 +325,5 @@ case "${1:-}" in
   apps) apps ;;
   map) shift; map_app "$@" ;;
   __transcribe) transcribe ;;
-  *) echo "Usage: ostt-dictate <start|stop|toggle|cancel|status [--json] [--follow]|levels|apps|map <class> [action]>" >&2; exit 1 ;;
+  *) echo "Usage: ostt-dictate <start|stop|toggle|cancel|status [--json] [--follow]|levels|apps|map <class> [<action> [--screenshot]]>" >&2; exit 1 ;;
 esac

@@ -11,7 +11,8 @@ import qs.Ui
 //
 // Right-click while idle opens a card listing the apps on the visible
 // workspaces (and any already set up), each with a dropdown choosing the
-// processing action for context-aware dictation in that app.
+// processing action for dictation in that app and a switch for attaching a
+// screenshot of its window.
 Panel {
   id: root
   moduleName: "ostt.dictation"
@@ -26,7 +27,8 @@ Panel {
 
   readonly property bool busy: phase === "recording" || phase === "transcribing"
 
-  // From `ostt-dictate apps`: [{ class, title, action }] and [{ id, name }].
+  // From `ostt-dictate apps`: [{ class, title, action, screenshot }] and
+  // [{ id, name }].
   property var apps: []
   property var actionOptions: [{ value: "", label: "None" }]
   property string appsError: ""
@@ -74,10 +76,11 @@ Panel {
     root.appsError = String(data.error || "")
   }
 
-  function setAction(appClass, action) {
-    mapProc.command = action === ""
-      ? ["ostt-dictate", "map", appClass]
-      : ["ostt-dictate", "map", appClass, action]
+  function setApp(appClass, action, screenshot) {
+    var command = ["ostt-dictate", "map", appClass]
+    if (action !== "") command.push(action)
+    if (action !== "" && screenshot) command.push("--screenshot")
+    mapProc.command = command
     mapProc.running = true
   }
 
@@ -139,7 +142,7 @@ Panel {
       if (root.phase === "recording") return "OSTT is recording. Click to paste, right-click to cancel."
       if (root.phase === "transcribing") return "OSTT is transcribing. Right-click to cancel."
       if (root.phase === "error") return "OSTT dictation failed:\n" + root.errorText
-      return "OSTT dictation. Click to start, right-click to choose apps with screen context."
+      return "OSTT dictation. Click to start, right-click to choose actions per app."
     }
     onPressed: function(b) {
       if (b === Qt.RightButton) {
@@ -183,7 +186,7 @@ Panel {
         spacing: Style.space(10)
 
         PanelSectionHeader {
-          text: "SCREEN CONTEXT PER APP"
+          text: "DICTATION PER APP"
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
         }
@@ -193,7 +196,7 @@ Panel {
           wrapMode: Text.Wrap
           textFormat: Text.PlainText
           text: root.appsError !== "" ? root.appsError
-            : "Dictation in an app with an action sends a screenshot of its window with your words to that action."
+            : "Dictation in an app with an action sends your words to that action. With the screenshot switch on, it also sends a screenshot of the app's window."
           color: root.bar.foreground
           opacity: root.appsError !== "" ? 1 : 0.6
           font.family: root.bar.fontFamily
@@ -208,13 +211,15 @@ Panel {
             id: row
             required property var modelData
             readonly property bool dropdownOpen: dropdown.popupOpen
+            readonly property string action: String(row.modelData.action || "")
+            readonly property bool screenshot: row.modelData.screenshot === true
             width: column.width
             implicitHeight: Math.max(labels.implicitHeight, dropdown.implicitHeight)
 
             Column {
               id: labels
               anchors.left: parent.left
-              anchors.right: dropdown.left
+              anchors.right: shot.left
               anchors.rightMargin: Style.space(10)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(2)
@@ -240,6 +245,35 @@ Panel {
               }
             }
 
+            // Only an app with an action can send a screenshot.
+            Row {
+              id: shot
+              anchors.right: dropdown.left
+              anchors.rightMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(6)
+              enabled: row.action !== ""
+              opacity: enabled ? 1 : 0.4
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: "Screenshot"
+                color: root.bar.foreground
+                opacity: 0.6
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              ToggleSwitch {
+                anchors.verticalCenter: parent.verticalCenter
+                checked: row.screenshot
+                interactive: shot.enabled
+                busy: mapProc.running
+                foreground: root.bar.foreground
+                onToggled: root.setApp(String(row.modelData["class"]), row.action, !row.screenshot)
+              }
+            }
+
             Dropdown {
               id: dropdown
               anchors.right: parent.right
@@ -247,8 +281,8 @@ Panel {
               showLabel: false
               fontFamily: root.bar.fontFamily
               options: root.actionOptions
-              value: String(row.modelData.action || "")
-              onChanged: function(v) { root.setAction(String(row.modelData["class"]), v) }
+              value: row.action
+              onChanged: function(v) { root.setApp(String(row.modelData["class"]), v, row.screenshot) }
             }
           }
         }

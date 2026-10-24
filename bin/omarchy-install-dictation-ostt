@@ -21,13 +21,14 @@ has_action() {
 write_plugin_config() {
   [[ -e $plugin_config ]] && return 0
   cat >"$plugin_config" <<'EOF'
-# Apps that get context-aware dictation. OSTT sends a screenshot of the window
-# along with your words to the processing action named here (see ostt.toml).
-# Keys are Hyprland window classes. `hyprctl clients -j | jq -r '.[].class'`
-# lists those of open windows; web apps have long generated ones (chrome-...).
+# Apps whose dictation goes through a processing action (see ostt.toml). With
+# screenshot = true, a screenshot of the window is sent along with your words.
+# Right-click the bar widget to choose these, or edit them here. Keys are
+# Hyprland window classes. `hyprctl clients -j | jq -r '.[].class'` lists those
+# of open windows; web apps have long generated ones (chrome-...).
 # Apps not listed get plain transcription.
 [apps]
-# "Slack" = "screen-context"
+# "Slack" = { action = "screen-context", screenshot = true }
 EOF
 }
 
@@ -137,7 +138,7 @@ EOF
   rm -rf "$candidate"
 
   write_plugin_config
-  echo "Added the screen-context action. List the apps that use it in $plugin_config"
+  echo "Added the screen-context action. Right-click the dictation icon in the bar to choose the apps that use it."
 }
 
 if omarchy-cmd-missing ostt; then

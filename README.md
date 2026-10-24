@@ -51,28 +51,29 @@ keyboard focus, so the text still lands in the app you were typing in.
 
 ## Context-aware dictation
 
-In apps you choose, dictation also takes a screenshot of the window and sends
-it with your words to an AI agent (Claude Code, Codex or OpenCode). The agent
-fixes names and terms to match the screen, and carries out spoken instructions
-such as "finish this sentence as a haiku". Every other app keeps plain
-transcription, and no screenshot is taken.
+In apps you choose, dictation sends your words to a processing action, and if
+you allow it, a screenshot of the window too. With the screenshot, an AI agent
+(Claude Code, Codex or OpenCode) fixes names and terms to match the screen,
+and carries out spoken instructions such as "finish this sentence as a haiku"
+or "reply saying I can't make it". Every other app keeps plain transcription.
+No screenshot is taken unless you turn it on for that app.
 
 The setup offers it and adds a `screen-context` processing action to
 `~/.config/ostt/ostt.toml`; edit its prompt there. To choose the apps,
 right-click the bar widget: it lists the apps on the visible workspaces, and
-any already set up, each with a dropdown of your processing actions. The
-choice applies to every window of that app. It is saved in
-`~/.config/ostt/dictate.toml` by Hyprland window class, which you can also
-edit by hand:
+any already set up, each with a dropdown of your processing actions and a
+screenshot switch. The choice applies to every window of that app. It is
+saved in `~/.config/ostt/dictate.toml` by Hyprland window class, which you can
+also edit by hand (`screenshot` defaults to `false`):
 
 ```toml
 [apps]
-"Slack" = "screen-context"
-"thunderbird" = "my-own-action"
+"Slack" = { action = "screen-context", screenshot = true }
+"thunderbird" = { action = "my-own-action" }
 ```
 
-Any AI action using Claude Code, Codex or OpenCode receives the screenshot; a
-bash action gets its path in `$OSTT_ATTACHMENT`. Gemini CLI actions can't take
+With the screenshot on, any AI action using Claude Code, Codex or OpenCode
+receives it; a bash action gets its path in `$OSTT_ATTACHMENT`. Gemini CLI actions can't take
 an image yet, so dictation in an app mapped to one fails. If something is wrong
 with an app's entry, or the screenshot fails, that dictation falls back to
 plain transcription and a notification says why.
@@ -98,7 +99,7 @@ in the notification works.
 
 Left-click starts dictation, or stops it and pastes into the focused app.
 Right-click cancels a recording or a pending transcription; otherwise it opens
-the list of apps for context-aware dictation.
+the list of apps with their processing action and screenshot switch.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
