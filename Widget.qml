@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -12,9 +11,10 @@ import qs.Ui
 // which prints a JSON line whenever the state changes.
 //
 // Right-click while idle opens a card listing the apps on the visible
-// workspaces (and any already set up) with their current settings. Each row's
-// cog opens a popup choosing the processing action for dictation in that app
-// and whether to attach a screenshot of its window.
+// workspaces (and any already set up) with their current settings. Clicking a
+// row expands it in place, as the network panel does, to choose the
+// processing action for dictation in that app and whether to attach a
+// screenshot of its window.
 Panel {
   id: root
   moduleName: "ostt.dictation"
@@ -29,11 +29,13 @@ Panel {
 
   readonly property bool busy: phase === "recording" || phase === "transcribing"
 
-  // From `ostt-dictate apps`: [{ class, name, title, action, screenshot }]
-  // and [{ id, name }].
+  // From `ostt-dictate apps`: [{ class, name, icon, title, action,
+  // screenshot }] and [{ id, name }].
   property var apps: []
   property var actionOptions: [{ value: "", label: "None" }]
   property string appsError: ""
+  // The class of the one expanded row; kept across reloads after a change.
+  property string expandedClass: ""
 
   visible: phase !== "" && !(hideWhenIdle && !busy && !errorFresh)
   implicitWidth: button.implicitWidth
@@ -92,15 +94,15 @@ Panel {
     return action
   }
 
-  function appByClass(appClass) {
-    for (var i = 0; i < root.apps.length; i++)
-      if (String(root.apps[i]["class"]) === appClass) return root.apps[i]
-    return null
+  function iconSource(icon) {
+    if (icon === "") return ""
+    if (icon.charAt(0) === "/") return "file://" + icon
+    return Quickshell.iconPath(icon, true)
   }
 
   onOpenedChanged: {
     if (opened) appsProc.running = true
-    else settings.close()
+    else root.expandedClass = ""
   }
 
   Process {
@@ -179,15 +181,16 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(460))
-    // The settings popup draws inside the card, so the card grows to fit it.
-    contentHeight: panel.fittedContentHeight(Math.max(column.implicitHeight, settings.opened ? settings.implicitHeight : 0))
+    contentWidth: panel.fittedContentWidth(Style.space(440))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: settings.opened
-      onCloseRequested: root.close()
+      onCloseRequested: {
+        if (root.expandedClass !== "") root.expandedClass = ""
+        else root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
       Column {
@@ -195,7 +198,7 @@ Panel {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        spacing: Style.space(10)
+        spacing: Style.space(4)
 
         PanelSectionHeader {
           text: "DICTATION PER APP"
@@ -205,11 +208,13 @@ Panel {
 
         Text {
           width: parent.width
+          bottomPadding: Style.space(6)
           wrapMode: Text.Wrap
           textFormat: Text.PlainText
           text: root.appsError !== "" ? root.appsError
-            : "Dictation in an app with an action sends your words to that action, and a screenshot of the app's window if you allow it."
-          color: root.bar.foreground
+            : root.apps.length === 0 ? "No apps are open on the visible workspaces."
+            : "Choose what happens to dictation in each app. Other apps get plain dictation."
+          color: root.appsError !== "" ? root.bar.urgent : root.bar.foreground
           opacity: root.appsError !== "" ? 1 : 0.6
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -217,182 +222,228 @@ Panel {
 
         Repeater {
           model: root.apps
+          delegate: AppRow {}
+        }
+      }
+    }
+  }
 
-          // App name and class | current settings | cog.
-          Item {
-            id: row
+  // One app: icon, name and class, and its current setting. Expands in place
+  // to the action pills and the screenshot switch.
+  component AppRow: CursorSurface {
+    id: row
+    required property var modelData
+    readonly property string appClass: String(modelData["class"])
+    readonly property string appName: String(modelData.name || appClass)
+    readonly property string action: String(modelData.action || "")
+    readonly property bool screenshot: modelData.screenshot === true
+    readonly property bool expanded: root.expandedClass === appClass
+
+    width: column.width
+    implicitHeight: header.height + (expanded ? settingsBody.implicitHeight : 0)
+    hasCursor: headerMouse.containsMouse && !expanded
+    current: expanded
+    foreground: root.bar.foreground
+    clip: true
+
+    MouseArea {
+      id: headerMouse
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      height: header.height
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: root.expandedClass = row.expanded ? "" : row.appClass
+    }
+
+    Item {
+      id: header
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      height: Math.max(appIcon.height, names.implicitHeight) + Style.spacing.rowPaddingX
+
+      Image {
+        id: appIcon
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
+        width: Style.space(22)
+        height: width
+        sourceSize.width: width * 2
+        sourceSize.height: height * 2
+        source: root.iconSource(String(row.modelData.icon || ""))
+        visible: status === Image.Ready
+      }
+      Text {
+        anchors.centerIn: appIcon
+        visible: !appIcon.visible
+        textFormat: Text.PlainText
+        text: "󰣆"
+        color: root.bar.foreground
+        opacity: 0.6
+        font.family: root.bar.fontFamily
+        font.pixelSize: Style.font.title
+      }
+
+      Column {
+        id: names
+        anchors.left: appIcon.right
+        anchors.leftMargin: Style.space(10)
+        anchors.right: setting.left
+        anchors.rightMargin: Style.space(10)
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Style.space(1)
+
+        Text {
+          width: parent.width
+          elide: Text.ElideRight
+          textFormat: Text.PlainText
+          text: row.appName
+          color: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.body
+        }
+        Text {
+          width: parent.width
+          elide: Text.ElideRight
+          textFormat: Text.PlainText
+          text: row.appClass
+          color: root.bar.foreground
+          opacity: 0.5
+          font.family: "monospace"
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      // Current setting at a glance: the action, with a camera when a
+      // screenshot goes along.
+      Row {
+        id: setting
+        anchors.right: chevron.left
+        anchors.rightMargin: Style.space(8)
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Style.space(6)
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          visible: row.action !== "" && row.screenshot
+          textFormat: Text.PlainText
+          text: "󰄀"
+          color: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          width: Math.min(implicitWidth, header.width * 0.4)
+          elide: Text.ElideRight
+          textFormat: Text.PlainText
+          text: row.action !== "" ? root.actionLabel(row.action) : "Plain dictation"
+          color: root.bar.foreground
+          opacity: row.action !== "" ? 0.9 : 0.5
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+      }
+
+      Text {
+        id: chevron
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
+        text: row.expanded ? "󰅀" : "󰅂"
+        color: root.bar.foreground
+        opacity: 0.6
+        font.family: root.bar.fontFamily
+        font.pixelSize: Style.font.body
+      }
+    }
+
+    Column {
+      id: settingsBody
+      visible: row.expanded
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: header.bottom
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      topPadding: Style.space(2)
+      bottomPadding: Style.space(12)
+      spacing: Style.space(10)
+
+      PanelSectionHeader {
+        text: "ACTION"
+        foreground: root.bar.foreground
+        fontFamily: root.bar.fontFamily
+      }
+
+      Flow {
+        width: parent.width
+        spacing: Style.space(6)
+
+        Repeater {
+          model: root.actionOptions
+          Button {
             required property var modelData
-            readonly property string appClass: String(row.modelData["class"])
-            readonly property string action: String(row.modelData.action || "")
-            width: column.width
-            implicitHeight: Math.max(app.implicitHeight, summary.implicitHeight, cog.implicitHeight)
-
-            Column {
-              id: app
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              width: Math.round(parent.width * 0.45)
-              spacing: Style.space(2)
-
-              Text {
-                width: parent.width
-                elide: Text.ElideRight
-                textFormat: Text.PlainText
-                text: String(row.modelData.name || row.appClass)
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-              }
-              Text {
-                width: parent.width
-                elide: Text.ElideRight
-                textFormat: Text.PlainText
-                text: row.appClass
-                color: root.bar.foreground
-                opacity: 0.6
-                font.family: "monospace"
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            Column {
-              id: summary
-              anchors.left: app.right
-              anchors.leftMargin: Style.space(10)
-              anchors.right: cog.left
-              anchors.rightMargin: Style.space(10)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(2)
-
-              Text {
-                width: parent.width
-                elide: Text.ElideRight
-                textFormat: Text.PlainText
-                text: row.action !== "" ? root.actionLabel(row.action) : "Plain dictation"
-                color: root.bar.foreground
-                opacity: row.action !== "" ? 1 : 0.6
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.bodySmall
-              }
-              Text {
-                width: parent.width
-                elide: Text.ElideRight
-                textFormat: Text.PlainText
-                visible: row.action !== ""
-                text: row.modelData.screenshot === true ? "With screenshot" : "No screenshot"
-                color: root.bar.foreground
-                opacity: 0.6
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            Button {
-              id: cog
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              iconText: "󰒓"
-              tooltipText: "Settings for " + String(row.modelData.name || row.appClass)
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              onClicked: settings.show(row.appClass, row.mapToItem(keyCatcher, 0, 0).y)
-            }
+            text: String(modelData.label)
+            tooltipText: modelData.value === "" ? "Plain dictation, no processing" : String(modelData.value)
+            fontSize: Style.font.bodySmall
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+            verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+            bordered: true
+            active: String(modelData.value) === row.action
+            onClicked: if (!mapProc.running && !active) root.setApp(row.appClass, String(modelData.value), row.screenshot)
           }
         }
       }
 
-      // One app's settings, over the card next to its row.
-      Popup {
-        id: settings
-        property string appClass: ""
-        property real rowY: 0
-        readonly property var app: root.appByClass(settings.appClass)
-        readonly property string action: settings.app ? String(settings.app.action || "") : ""
-        readonly property bool screenshot: settings.app ? settings.app.screenshot === true : false
-        readonly property var borderSpec: Border.localOrSurfaceSpec("popups", "border", Commons.Color.popups.border, Commons.Color.popups.border, Style.normalBorderWidth)
+      // Only an app with an action can send a screenshot.
+      Item {
+        width: parent.width
+        implicitHeight: Math.max(shotText.implicitHeight, shotSwitch.implicitHeight)
+        enabled: row.action !== ""
+        opacity: enabled ? 1 : 0.4
 
-        function show(appClass, y) {
-          settings.appClass = appClass
-          settings.rowY = y
-          settings.open()
-        }
-
-        x: 0
-        y: Math.max(0, Math.min(settings.rowY, keyCatcher.height - settings.height))
-        width: keyCatcher.width
-        padding: Style.space(12)
-        focus: true
-
-        background: BorderSurface {
-          color: Commons.Color.popups.background
-          borderSpec: settings.borderSpec
-          radius: Style.cornerRadius
-        }
-
-        contentItem: Column {
-          spacing: Style.space(8)
-          Keys.onEscapePressed: settings.close()
+        Column {
+          id: shotText
+          anchors.left: parent.left
+          anchors.right: shotSwitch.left
+          anchors.rightMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(1)
 
           Text {
             width: parent.width
-            elide: Text.ElideRight
             textFormat: Text.PlainText
-            text: settings.app ? String(settings.app.name || settings.appClass) : settings.appClass
+            text: "Send a screenshot"
             color: root.bar.foreground
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
-            font.bold: true
           }
           Text {
             width: parent.width
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             textFormat: Text.PlainText
-            text: settings.appClass
+            text: "The action sees the window as it is when dictation starts."
             color: root.bar.foreground
-            opacity: 0.6
-            font.family: "monospace"
-            font.pixelSize: Style.font.caption
-          }
-
-          Text {
-            topPadding: Style.space(4)
-            textFormat: Text.PlainText
-            text: "ACTION"
-            color: root.bar.foreground
-            opacity: 0.6
+            opacity: 0.5
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
-            font.bold: true
           }
-          Repeater {
-            model: root.actionOptions
-            Button {
-              required property var modelData
-              width: parent.width
-              leftAlign: true
-              text: modelData.value === "" ? "None, plain dictation" : String(modelData.label)
-              selected: modelData.value === settings.action
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              fontSize: Style.font.bodySmall
-              onClicked: if (!mapProc.running) root.setApp(settings.appClass, String(modelData.value), settings.screenshot)
-            }
-          }
+        }
 
-          // Only an app with an action can send a screenshot.
-          Toggle {
-            width: parent.width
-            enabled: settings.action !== ""
-            opacity: enabled ? 1 : 0.4
-            label: "Send a screenshot"
-            description: "Of the app's window when dictation starts, to the action"
-            checked: settings.screenshot
-            foreground: root.bar.foreground
-            fontFamily: root.bar.fontFamily
-            titleSize: Style.font.bodySmall
-            onClicked: if (enabled && !mapProc.running) root.setApp(settings.appClass, settings.action, !settings.screenshot)
-          }
+        ToggleSwitch {
+          id: shotSwitch
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          checked: row.screenshot
+          busy: mapProc.running
+          foreground: root.bar.foreground
+          onToggled: root.setApp(row.appClass, row.action, !row.screenshot)
         }
       }
     }

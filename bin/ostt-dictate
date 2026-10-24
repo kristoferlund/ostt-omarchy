@@ -12,8 +12,8 @@
 #   ostt-dictate status [--json] [--follow]
 #   ostt-dictate levels   follow the input level while recording
 #   ostt-dictate apps     JSON: processing actions, and the apps on visible
-#                         workspaces or in the config, with their name and
-#                         settings
+#                         workspaces or in the config, with their name, icon
+#                         and settings
 #   ostt-dictate map <class> [<action> [--screenshot]]
 #                         set an app's action; no action clears it
 
@@ -211,8 +211,9 @@ print(json.dumps({k: v for k, v in apps.items() if isinstance(v, str)}))
 EOF
 }
 
-# Prints a JSON object of window class -> app name, from the desktop entries
-# whose StartupWMClass or file name matches the class. Earlier data dirs win.
+# Prints a JSON object of window class -> { name, icon }, from the desktop
+# entries whose StartupWMClass or file name matches the class. Earlier data
+# dirs win.
 app_names() {
   python3 - "$@" <<'EOF'
 import glob, json, os, sys
@@ -239,7 +240,7 @@ for d in dirs:
         stem = os.path.basename(path)[:-len(".desktop")].lower()
         for key in (entry.get("StartupWMClass", "").lower(), stem, stem.rsplit(".", 1)[-1]):
             if key in classes:
-                names.setdefault(classes[key], entry["Name"])
+                names.setdefault(classes[key], {"name": entry["Name"], "icon": entry.get("Icon", "")})
 print(json.dumps(names))
 EOF
 }
@@ -263,7 +264,8 @@ apps() {
     | ($mapped | keys - ($visible | map(.class)) | map({class: ., title: ""})) as $elsewhere
     | {error: $error, actions: $actions,
        apps: (($visible + $elsewhere)
-         | map(. + {name: ($names[.class] // .class), action: ($mapped[.class].action // ""),
+         | map(. + {name: ($names[.class].name // .class), icon: ($names[.class].icon // ""),
+                   action: ($mapped[.class].action // ""),
                    screenshot: ($mapped[.class].screenshot // false)}))}'
 }
 
